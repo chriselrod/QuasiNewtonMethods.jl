@@ -1,17 +1,27 @@
 module QuasiNewtonMethods
 
 using   SIMDPirates,
-        PaddedMatrices,
-        Parameters,
-        LinearAlgebra,
-        VectorizationBase
+    PaddedMatrices,
+    Parameters,
+    LinearAlgebra,
+    VectorizationBase,
+    StackPointers
 
 using PaddedMatrices: AbstractMutableFixedSizePaddedVector,
     AbstractMutableFixedSizePaddedMatrix,
     AbstractFixedSizePaddedArray,
     AbstractFixedSizePaddedVector
 
+export optimize!
 
+"""
+To find a mode, define methods for `logdensity` and logdensity_and_gradient!` dispatching on obj, and evaluating at the position `q`.
+
+logdensity(obj, q, [::StackPointer])
+logdensity_and_gradient!(∇, obj, q, [::StackPointer])
+
+These must return a value (eg, a logdensity). logdensity_and_gradient! should store the gradient in ∇.
+"""
 function logdensity end
 function logdensity_and_gradient! end
 #=
@@ -166,26 +176,21 @@ end
 
 
 
-struct BackTracking{O, TF, TI}
-    c_1::TF
-    ρ_hi::TF
-    ρ_lo::TF
-    iterations::TI
-    maxstep::TF
+struct BackTracking{O}
+    c_1::Float64
+    ρ_hi::Float64
+    ρ_lo::Float64
+    iterations::Int
 end
-function BackTracking(::Val{O} = Val(3); c_1::TF = 1e-4, ρ_hi::TF = 0.5, ρ_lo::TF = 0.1, iterations::TI = 1_000, maxstep::TF = Inf) where {O,TF,TI}
-    BackTracking{O,TF,TI}(c_1, ρ_hi, ρ_lo, iterations, maxstep)
+function BackTracking(::Val{O} = Val(3); c_1 = 1e-4, ρ_hi = 0.5, ρ_lo = 0.1, iterations = 1_000) where {O}
+    BackTracking{O}(c_1, ρ_hi, ρ_lo, iterations, maxstep)
 end
-function BackTracking{TF}(::Val{O} = Val(3); c_1 = TF(1e-4), ρ_hi = TF(0.5), ρ_lo = TF(0.1), iterations::TI = 1_000, maxstep = TF(Inf)) where {O,TF,TI}
-    BackTracking{O,TF,TI}(c_1, ρ_hi, ρ_lo, iterations, maxstep)
-end
-
 
 abstract type AbstractBFGSState{P,T,L,LT} end
 
 mutable struct BFGSState{P,T,L,LT} <: AbstractBFGSState{P,T,L,LT}
-    invH::ConstantFixedSizePaddedMatrix{P,P,T,L,LT}
     x_old::ConstantFixedSizePaddedVector{P,T,L,L}
+    invH::ConstantFixedSizePaddedMatrix{P,P,T,L,LT}
     x_new::ConstantFixedSizePaddedVector{P,T,L,L}
     ∇_old::ConstantFixedSizePaddedVector{P,T,L,L}
     δ∇::ConstantFixedSizePaddedVector{P,T,L,L}
@@ -226,8 +231,8 @@ end
 @inline Base.pointer(state::PtrBFGSState) = state.ptr
 
 
-@inline ref_invH(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrMatrix{P,P,T,L,LT,false}(pointer(s))
-@inline ref_x_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + LT*sizeof(T))
+@inline ref_x_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s))# + LT*sizeof(T))
+@inline ref_invH(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrMatrix{P,P,T,L,LT,false}(pointer(s) + L*sizeof(T))
 @inline ref_x_new(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+L)*sizeof(T))
 @inline ref_∇_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+2L)*sizeof(T))
 @inline ref_δ∇(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+3L)*sizeof(T))
@@ -235,8 +240,7 @@ end
 @inline ref_s(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+5L)*sizeof(T))
 @inline ref_∇(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+6L)*sizeof(T))
 
-function initial_invH!(state::AbstractBFGSState{P,T}) where {P,T}
-    invH = ref_invH(state)
+function initial_invH!(invH::AbstractFixedSizePaddedMatrix{P,P,T}) where {P,T}
     fill!(invH, zero(T))
     @inbounds for p = 1:P
         invH[p,p] = one(T)
@@ -255,15 +259,12 @@ nanmax(a, b) = a < b ? b : (isnan(a) ? b : a)
     VL = min(VectorizationBase.REGISTER_SIZE ÷ T_size, L)
     VLT = VL * T_size
     V = Vec{VL,T}
-
     iter = L ÷ VL
     q = quote
         ptr_C = pointer(C)
         ptr_B = pointer(B)
         vα = vbroadcast($V, α)
     end
-
-
     rep, rem = divrem(iter, 4)
     if (rep == 1 && rem == 0) || (rep >= 1 && rem != 0)
         rep -= 1
@@ -311,8 +312,8 @@ end
 
 """
 Optimum value is stored in state.x_old.
-    """
-function optimize_light!(state, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls::BackTracking{order}, tol = 1e-8) where {P,T,L,order}
+"""
+function optimize!(state, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls::BackTracking{order} = BackTracking(), tol = 1e-8) where {P,T,L,order}
     x_old = ref_x_old(state)
     ∇_old = ref_∇_old(state)
     invH = ref_invH(state)
@@ -322,15 +323,15 @@ function optimize_light!(state, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls
     ∇ = ref_∇(state)
     x_new = ref_x_new(state)
     copyto!(x_old, x)
-    initial_invH!(state)
-    c_1, ρ_hi, ρ_lo, iterations = ls.c_1, ls.ρ_hi, ls.ρ_lo, ls.iterations
+    initial_invH!(invH)
+    c_1, ρ_hi, ρ_lo, iterations = T(ls.c_1), T(ls.ρ_hi), T(ls.ρ_lo), ls.iterations
     iterfinitemax = round(Int,-log2(eps(T)))
     sqrttol = sqrt(eps(T))
     α_0 = one(T)
     N = 200
     f_calls = 0
     g_calls = 0
-    @fastmath for n = 1:N
+    @fastmath for n ∈ 1:N
         ϕ_0 = - logdensity_and_gradient!(∇, obj, x_old); f_calls +=1; g_calls +=1;
         isfinite(ϕ_0) || return T(NaN)
         if maximum(abs, ∇) < tol
@@ -358,7 +359,7 @@ function optimize_light!(state, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls
             dϕ_0 -= ∇[i] * s_i
         end
         if dϕ_0 >= zero(T) # If bad, reset search direction
-            initial_invH!(state)
+            initial_invH!(invH)
             dϕ_0 = zero(T)
             @inbounds @simd for i ∈ 1:L
                 s_i = ∇[i]
@@ -399,7 +400,7 @@ function optimize_light!(state, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls
             iteration += 1
 
             # Ensure termination
-            iteration > iterations && linesearch_failure(iterations)
+            iteration > iterations && return _sptr_, T(NaN) # linesearch_failure(iterations)
 
             # Shrink proposed step-size:
             if order == 2 || iteration == 1
@@ -448,6 +449,301 @@ function optimize_light!(state, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls
     T(NaN)
 end
 
+"""
+Optimum value is stored in state.x_old.
+"""
+@generated function optimize!(_sptr_::StackPointer, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls::BackTracking{order} = BackTracking(), tol = 1e-8) where {P,T,L,order}
+    quote
+        sptr, x_old = PtrVector{$P,$T}(_sptr_)
+        sptr, ∇ = PtrVector{$P,$T}(sptr)
+        ptr_∇ = pointer(∇)
+        _sptr, x_new = PtrVector{$P,$T}(sptr)
+        _sptr, ∇_old = PtrVector{$P,$T}(_sptr)
+        _sptr, invH = PtrMatrix{$P,$P,$T}(_sptr)
+        _sptr, δ∇ = PtrVector{$P,$T}(_sptr)
+        _sptr, s = PtrVector{$P,$T}(_sptr)
+        _sptr, u = PtrVector{$P,$T}(_sptr)
+        copyto!(x_old, x)
+        initial_invH!(invH)
+        c_1, ρ_hi, ρ_lo, iterations = T(ls.c_1), T(ls.ρ_hi), T(ls.ρ_lo), ls.iterations
+        iterfinitemax = $(round(Int,-log2(eps(T))))
+        sqrttol = $(Base.FastMath.sqrt_fast(eps(T)))
+        α_0 = one($T)
+        N = 200
+        f_calls = 0
+        g_calls = 0
+        @fastmath for n ∈ 1:N
+            ϕ_0 = - logdensity_and_gradient!(∇, obj, x_old, _sptr); f_calls +=1; g_calls +=1;
+            isfinite(ϕ_0) || return _sptr_, $T(NaN)
+            if maximum(abs, ∇) < tol
+                if pointer(∇) != ptr_∇
+                    copyto!(∇_old, ∇)
+                end
+                return sptr, -ϕ_0
+            end
+            if n > 1 # update hessian
+                dx_dg = zero($T)
+                $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
+                    δ∇_i =  ∇_old[i] - ∇[i]
+                    δ∇[i] = δ∇_i
+                    dx_dg += s[i] * δ∇_i
+                end end))
+                mul!(u, invH, δ∇)
+                c2 = one($T) / dx_dg
+                c1 = muladd(dot(δ∇, u), c2*c2, c2)
+                BFGS_update!(invH, s, u, c1, c2)
+            end
+            mul!(s, invH, ∇)
+            dϕ_0 = zero($T)
+            @inbounds @simd for i ∈ 1:$L
+                s_i = s[i]
+                dϕ_0 -= ∇[i] * s_i
+            end
+            if dϕ_0 >= zero($T) # If bad, reset search direction
+                initial_invH!(invH)
+                dϕ_0 = zero(T)
+                $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
+                    s_i = ∇[i]
+                    s[i] = s_i
+                    dϕ_0 -= s_i * ∇[i]
+                end end))
+            end
+            #### Perform line search
+
+            # Count the total number of iterations
+            iteration = 0
+            ϕx_0, ϕx_1 = ϕ_0, ϕ_0
+            α_1, α_2 = α_0, α_0
+            @inbounds @simd for i ∈ 1:$L
+                x_new[i] = x_old[i] + α_1*s[i]
+            end
+            # SIMDArrays.vadd!(x_new, x_old, α_1, s)
+            # ϕx_1 = f(x + α_1*s); f_calls += 1;
+            ϕx_1 = -logdensity(obj, x_new, _sptr); f_calls += 1;
+
+            # Hard-coded backtrack until we find a finite function value
+            iterfinite = 0
+            while !isfinite(ϕx_1) && iterfinite < iterfinitemax
+                iterfinite += 1
+                α_1 = α_2
+                α_2 = T(0.5)*α_1
+                @inbounds @simd for i ∈ 1:$L
+                    x_new[i] = x_old[i] + α_2*s[i]
+                end
+                # SIMDArrays.vadd!(x_new, x_old, α_2, s)
+                # ϕx_1 = f(x + α_2*s); f_calls += 1;
+                ϕx_1 = -logdensity(obj, x_new, _sptr); f_calls += 1;
+            end
+
+            # Backtrack until we satisfy sufficient decrease condition
+            while ϕx_1 > ϕ_0 + c_1 * α_2 * dϕ_0
+                # Increment the number of steps we've had to perform
+                iteration += 1
+
+                # Ensure termination
+                iteration > iterations && return _sptr_, $T(NaN) # linesearch_failure(iterations)
+
+                # Shrink proposed step-size:
+                if order == 2 || iteration == 1
+                    # backtracking via quadratic interpolation:
+                    # This interpolates the available data
+                    #    f(0), f'(0), f(α)
+                    # with a quadractic which is then minimised; this comes with a
+                    # guaranteed backtracking factor 0.5 * (1-c_1)^{-1} which is < 1
+                    # provided that c_1 < 1/2; the backtrack_condition at the beginning
+                    # of the function guarantees at least a backtracking factor ρ.
+                    α_tmp = - (dϕ_0 * α_2*α_2) / ( T(2) * (ϕx_1 - ϕ_0 - dϕ_0*α_2) )
+                else
+                    div = one(T) / (α_1*α_1 * α_2*α_2 * (α_2 - α_1))
+                    a = (α_1*α_1*(ϕx_1 - ϕ_0 - dϕ_0*α_2) - α_2*α_2*(ϕx_0 - ϕ_0 - dϕ_0*α_1))*div
+                    b = (-α_1*α_1*α_1*(ϕx_1 - ϕ_0 - dϕ_0*α_2) + α_2*α_2*α_2*(ϕx_0 - ϕ_0 - dϕ_0*α_1))*div
+
+                    if norm(a) <= $(eps(T)) + sqrttol*norm(a)
+                        α_tmp = dϕ_0 / (T(2)*b)
+                    else
+                        # discriminant
+                        d = max(b*b - $(T(3))*a*dϕ_0, zero($T))
+                        # quadratic equation root
+                        α_tmp = (sqrt(d) - b) / ($(T(3))*a)
+                    end
+                end
+                α_1 = α_2
+
+                α_tmp = nanmin(α_tmp, α_2*ρ_hi) # avoid too small reductions
+                α_2 = nanmax(α_tmp, α_2*ρ_lo) # avoid too big reductions
+
+                # Evaluate f(x) at proposed position
+                # ϕx_0, ϕx_1 = ϕx_1, f(x + α_2*s); f_calls += 1;
+                @inbounds @simd for i ∈ 1:$L
+                    x_new[i] = x_old[i] + α_2*s[i]
+                end
+                ϕx_0, ϕx_1 = ϕx_1, -logdensity(obj, x_new, _sptr); f_calls += 1;
+            end
+            alpha, fpropose = α_2, ϕx_1
+            update_state!(s, x_old, alpha)
+            ∇_old, ∇ = ∇, ∇_old
+        end
+        # return StaticOptimizationResults(NaN, N, tol, f_calls, g_calls, false), x_old
+        _sptr_, $T(NaN)
+    end
+end
+
+
+
+@generated function proptimize!(_sptr_::StackPointer, obj, x::AbstractFixedSizePaddedVector{P,T,L}, penalty::T = 1e-4, N::Int = 200, ls::BackTracking{order} = BackTracking(), tol = 1e-8) where {P,T,L,order}
+    W = VectorizationBase.pick_vector_width(P, T)
+    quote
+        sptr, x_old = PtrVector{$P,$T}(_sptr_)
+        sptr, ∇ = PtrVector{$P,$T}(sptr)
+        ptr_∇ = pointer(∇)
+        _sptr, x_new = PtrVector{$P,$T}(sptr)
+        _sptr, ∇_old = PtrVector{$P,$T}(_sptr)
+        _sptr, ∇_new = PtrVector{$P,$T}(_sptr)
+        _sptr, invH = PtrMatrix{$P,$P,$T}(_sptr)
+        _sptr, δ∇ = PtrVector{$P,$T}(_sptr)
+        _sptr, s = PtrVector{$P,$T}(_sptr)
+        _sptr, u = PtrVector{$P,$T}(_sptr)
+        copyto!(x_old, x)
+        initial_invH!(invH)
+        c_1, ρ_hi, ρ_lo, iterations = T(ls.c_1), T(ls.ρ_hi), T(ls.ρ_lo), ls.iterations
+        iterfinitemax = $(round(Int,-log2(eps(T))))
+        sqrttol = $(Base.FastMath.sqrt_fast(eps(T)))
+        α_0 = one($T)
+        # N = 200
+        f_calls = 0
+        g_calls = 0
+        @fastmath for n ∈ 1:N
+            nϕ_0 = logdensity_and_gradient!(∇, obj, x_old, _sptr); f_calls +=1; g_calls +=1;
+            isfinite(ϕ_0) || return _sptr_, $T(NaN)
+            ϕ_0 = zero($T)
+            vmaxabs∇ = vbroadcast(Vec{$W,$T}, zero($T))
+            $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
+                xᵢ = x_old[i]
+                xᵢpenalty = xᵢ * penalty
+                ϕ_0 += xᵢ * xᵢpenalty
+                ∇ᵢ = ∇[i] - xᵢpenalty
+                ∇_new[i] = ∇ᵢ
+                vmaxabs∇ = SIMDPirates.vmax(SIMDPirates.vabs(∇ᵢ),vmaxabs∇)
+            end end))
+            vany(SIMDPirates.vgreater(vmaxabs∇, tol)) && return sptr, nϕ_0
+            ϕ_0 = $(T(0.5)) * ϕ_0 - nϕ_0
+            if n > 1 # update hessian
+                dx_dg = zero($T)
+                $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
+                    δ∇_i =  ∇_old[i] - ∇[i]
+                    δ∇[i] = δ∇_i
+                    dx_dg += s[i] * δ∇_i
+                end end))
+                mul!(u, invH, δ∇)
+                c2 = one($T) / dx_dg
+                c1 = muladd(dot(δ∇, u), c2*c2, c2)
+                BFGS_update!(invH, s, u, c1, c2)
+            end
+            mul!(s, invH, ∇)
+            dϕ_0 = zero($T)
+            @inbounds @simd for i ∈ 1:$L
+                s_i = s[i]
+                dϕ_0 -= ∇[i] * s_i
+            end
+            if dϕ_0 >= zero($T) # If bad, reset search direction
+                initial_invH!(invH)
+                dϕ_0 = zero(T)
+                $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
+                    s_i = ∇[i]
+                    s[i] = s_i
+                    dϕ_0 -= s_i * ∇[i]
+                end end))
+            end
+            #### Perform line search
+
+            # Count the total number of iterations
+            iteration = 0
+            ϕx_0, ϕx_1 = ϕ_0, ϕ_0
+            α_1, α_2 = α_0, α_0
+            @inbounds @simd for i ∈ 1:$L
+                x_new[i] = x_old[i] + α_1*s[i]
+            end
+            # SIMDArrays.vadd!(x_new, x_old, α_1, s)
+            # ϕx_1 = f(x + α_1*s); f_calls += 1;
+            nϕx_1 = logdensity(obj, x_new, _sptr); f_calls += 1;
+
+            # Hard-coded backtrack until we find a finite function value
+            iterfinite = 0
+            while !isfinite(nϕx_1) && iterfinite < iterfinitemax
+                iterfinite += 1
+                α_1 = α_2
+                α_2 = T(0.5)*α_1
+                @inbounds @simd for i ∈ 1:$L
+                    x_new[i] = x_old[i] + α_2*s[i]
+                end
+                # SIMDArrays.vadd!(x_new, x_old, α_2, s)
+                # ϕx_1 = f(x + α_2*s); f_calls += 1;
+                nϕx_1 = logdensity(obj, x_new, _sptr); f_calls += 1;
+            end
+            ϕx_1 = zero(T)
+            $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
+                          xᵢ = x_new[i]
+                          ϕx_1 += xᵢ * xᵢ
+                          end end))
+            ϕx_1 = $(T(0.5))*penalty*ϕx_1 - nϕx_1
+            # Backtrack until we satisfy sufficient decrease condition
+            while ϕx_1 > ϕ_0 + c_1 * α_2 * dϕ_0
+                # Increment the number of steps we've had to perform
+                iteration += 1
+
+                # Ensure termination
+                iteration > iterations && return _sptr_, $T(NaN) # linesearch_failure(iterations)
+
+                # Shrink proposed step-size:
+                if order == 2 || iteration == 1
+                    # backtracking via quadratic interpolation:
+                    # This interpolates the available data
+                    #    f(0), f'(0), f(α)
+                    # with a quadractic which is then minimised; this comes with a
+                    # guaranteed backtracking factor 0.5 * (1-c_1)^{-1} which is < 1
+                    # provided that c_1 < 1/2; the backtrack_condition at the beginning
+                    # of the function guarantees at least a backtracking factor ρ.
+                    α_tmp = - (dϕ_0 * α_2*α_2) / ( T(2) * (ϕx_1 - ϕ_0 - dϕ_0*α_2) )
+                else
+                    div = one(T) / (α_1*α_1 * α_2*α_2 * (α_2 - α_1))
+                    a = (α_1*α_1*(ϕx_1 - ϕ_0 - dϕ_0*α_2) - α_2*α_2*(ϕx_0 - ϕ_0 - dϕ_0*α_1))*div
+                    b = (-α_1*α_1*α_1*(ϕx_1 - ϕ_0 - dϕ_0*α_2) + α_2*α_2*α_2*(ϕx_0 - ϕ_0 - dϕ_0*α_1))*div
+
+                    if norm(a) <= $(eps(T)) + sqrttol*norm(a)
+                        α_tmp = dϕ_0 / (T(2)*b)
+                    else
+                        # discriminant
+                        d = max(b*b - $(T(3))*a*dϕ_0, zero($T))
+                        # quadratic equation root
+                        α_tmp = (sqrt(d) - b) / ($(T(3))*a)
+                    end
+                end
+                α_1 = α_2
+
+                α_tmp = nanmin(α_tmp, α_2*ρ_hi) # avoid too small reductions
+                α_2 = nanmax(α_tmp, α_2*ρ_lo) # avoid too big reductions
+
+                # Evaluate f(x) at proposed position
+                # ϕx_0, ϕx_1 = ϕx_1, f(x + α_2*s); f_calls += 1;
+                @inbounds @simd for i ∈ 1:$L
+                    x_new[i] = x_old[i] + α_2*s[i]
+                end
+                ϕx_0, nϕx_1 = ϕx_1, logdensity(obj, x_new, _sptr); f_calls += 1;
+                ϕx_1 = zero(T)
+                $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
+                              xᵢ = x_new[i]
+                              ϕx_1 += xᵢ * xᵢ
+                              end end))
+                ϕx_1 = $(T(0.5))*penalty*ϕx_1 - nϕx_1
+            end
+            alpha, fpropose = α_2, ϕx_1
+            update_state!(s, x_old, alpha)
+            ∇_old, ∇ = ∇, ∇_old
+        end
+        # return StaticOptimizationResults(NaN, N, tol, f_calls, g_calls, false), x_old
+        _sptr_, $T(NaN)
+    end
+end
 
 
 
