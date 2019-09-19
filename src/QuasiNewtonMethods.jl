@@ -240,7 +240,7 @@ end
 @inline ref_s(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+5L)*sizeof(T))
 @inline ref_∇(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+6L)*sizeof(T))
 
-function initial_invH!(invH::AbstractFixedSizePaddedMatrix{P,P,T}) where {P,T}
+function initial_invH!(invH::PaddedMatrices.AbstractFixedSizePaddedMatrix{P,P,T}) where {P,T}
     fill!(invH, zero(T))
     @inbounds for p = 1:P
         invH[p,p] = one(T)
