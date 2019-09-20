@@ -24,6 +24,11 @@ These must return a value (eg, a logdensity). logdensity_and_gradient! should st
 """
 function logdensity end
 function logdensity_and_gradient! end
+
+abstract type AbstractProbabilityModel{D} end# <: LogDensityProblems.AbstractLogDensityProblem end
+dimension(::AbstractProbabilityModel{D}) where {D} = PaddedMatrices.Static{D}()
+Base.length(::AbstractProbabilityModel{D}) where {D} = D
+
 #=
 function BFGS_update_quote(R,stride,T)
     W, rows, cols, row_reps_per_kernel = PaddedMatrices.pick_kernel_size(T, R, R)
@@ -589,13 +594,26 @@ Optimum value is stored in state.x_old.
 end
 
 
+"""
 
-@generated function proptimize!(_sptr_::StackPointer, obj, x::AbstractFixedSizePaddedVector{P,T,L}, penalty::T = 1e-4, N::Int = 200, ls::BackTracking{order} = BackTracking(), tol = 1e-8) where {P,T,L,order}
+Optionally pass in the initial density to skip the first logdensity_and_gradient! evaluation
+
+x_old is the initial position.
+∇ is a gradient buffer; it will be assumed to hold the initial gradient if the initial value is not nothing.
+
+x_old will be overwritten by the final final position, and ∇ by the final gradient.
+
+"""
+@generated function proptimize!(
+    sptr::StackPointer, obj::AbstractProbabilityModel{P}, x_old::PtrVector{P,T}, ∇::PtrVector{P,T}, init_nϕ_0::Union{T,Nothing} = nothing,
+    penalty::T = 1e-4, N::Int = 200, ls::BackTracking{order} = BackTracking(), tol::T = 1e-8
+) where {P,T,order}
+    L = VectorizationBase.align(P, T)
     W = VectorizationBase.pick_vector_width(P, T)
     quote
-        sptr, x_old = PtrVector{$P,$T}(_sptr_)
-        sptr, ∇ = PtrVector{$P,$T}(sptr)
-        ptr_∇ = pointer(∇)
+        # sptr, x_old = PtrVector{$P,$T}(_sptr_)
+        # sptr, ∇ = PtrVector{$P,$T}(sptr)
+        # ptr_∇ = pointer(∇)
         _sptr, x_new = PtrVector{$P,$T}(sptr)
         _sptr, ∇_old = PtrVector{$P,$T}(_sptr)
         _sptr, ∇_new = PtrVector{$P,$T}(_sptr)
@@ -603,18 +621,22 @@ end
         _sptr, δ∇ = PtrVector{$P,$T}(_sptr)
         _sptr, s = PtrVector{$P,$T}(_sptr)
         _sptr, u = PtrVector{$P,$T}(_sptr)
-        copyto!(x_old, x)
+        # copyto!(x_old, x)
         initial_invH!(invH)
         c_1, ρ_hi, ρ_lo, iterations = T(ls.c_1), T(ls.ρ_hi), T(ls.ρ_lo), ls.iterations
         iterfinitemax = $(round(Int,-log2(eps(T))))
         sqrttol = $(Base.FastMath.sqrt_fast(eps(T)))
         α_0 = one($T)
         # N = 200
-        f_calls = 0
-        g_calls = 0
+        # f_calls = 0
+        # g_calls = 0
         @fastmath for n ∈ 1:N
-            nϕ_0 = logdensity_and_gradient!(∇, obj, x_old, _sptr); f_calls +=1; g_calls +=1;
-            isfinite(ϕ_0) || return _sptr_, $T(NaN)
+            if init_nϕ_0 === nothing || n > 1
+                nϕ_0 = logdensity_and_gradient!(∇, obj, x_old, _sptr)#; f_calls +=1; g_calls +=1;
+            else
+                nϕ_0 = init_nϕ_0
+            end
+            isfinite(ϕ_0) || return $T(NaN)
             ϕ_0 = zero($T)
             vmaxabs∇ = vbroadcast(Vec{$W,$T}, zero($T))
             $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
@@ -625,12 +647,12 @@ end
                 ∇_new[i] = ∇ᵢ
                 vmaxabs∇ = SIMDPirates.vmax(SIMDPirates.vabs(∇ᵢ),vmaxabs∇)
             end end))
-            vany(SIMDPirates.vgreater(vmaxabs∇, tol)) && return sptr, nϕ_0
+            vany(SIMDPirates.vgreater(vmaxabs∇, tol)) && return nϕ_0
             ϕ_0 = $(T(0.5)) * ϕ_0 - nϕ_0
             if n > 1 # update hessian
                 dx_dg = zero($T)
                 $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
-                    δ∇_i =  ∇_old[i] - ∇[i]
+                    δ∇_i =  ∇_old[i] - ∇_new[i]
                     δ∇[i] = δ∇_i
                     dx_dg += s[i] * δ∇_i
                 end end))
@@ -639,19 +661,19 @@ end
                 c1 = muladd(dot(δ∇, u), c2*c2, c2)
                 BFGS_update!(invH, s, u, c1, c2)
             end
-            mul!(s, invH, ∇)
+            mul!(s, invH, ∇_new)
             dϕ_0 = zero($T)
             @inbounds @simd for i ∈ 1:$L
                 s_i = s[i]
-                dϕ_0 -= ∇[i] * s_i
+                dϕ_0 -= ∇_new[i] * s_i
             end
             if dϕ_0 >= zero($T) # If bad, reset search direction
                 initial_invH!(invH)
                 dϕ_0 = zero(T)
                 $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
-                    s_i = ∇[i]
+                    s_i = ∇_new[i]
                     s[i] = s_i
-                    dϕ_0 -= s_i * ∇[i]
+                    dϕ_0 -= s_i * ∇_new[i]
                 end end))
             end
             #### Perform line search
@@ -665,7 +687,7 @@ end
             end
             # SIMDArrays.vadd!(x_new, x_old, α_1, s)
             # ϕx_1 = f(x + α_1*s); f_calls += 1;
-            nϕx_1 = logdensity(obj, x_new, _sptr); f_calls += 1;
+            nϕx_1 = logdensity(obj, x_new, _sptr)#; f_calls += 1;
 
             # Hard-coded backtrack until we find a finite function value
             iterfinite = 0
@@ -678,7 +700,7 @@ end
                 end
                 # SIMDArrays.vadd!(x_new, x_old, α_2, s)
                 # ϕx_1 = f(x + α_2*s); f_calls += 1;
-                nϕx_1 = logdensity(obj, x_new, _sptr); f_calls += 1;
+                nϕx_1 = logdensity(obj, x_new, _sptr)#; f_calls += 1;
             end
             ϕx_1 = zero(T)
             $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
@@ -692,7 +714,7 @@ end
                 iteration += 1
 
                 # Ensure termination
-                iteration > iterations && return _sptr_, $T(NaN) # linesearch_failure(iterations)
+                iteration > iterations && return $T(NaN) # linesearch_failure(iterations)
 
                 # Shrink proposed step-size:
                 if order == 2 || iteration == 1
@@ -728,7 +750,7 @@ end
                 @inbounds @simd for i ∈ 1:$L
                     x_new[i] = x_old[i] + α_2*s[i]
                 end
-                ϕx_0, nϕx_1 = ϕx_1, logdensity(obj, x_new, _sptr); f_calls += 1;
+                ϕx_0, nϕx_1 = ϕx_1, logdensity(obj, x_new, _sptr)#; f_calls += 1;
                 ϕx_1 = zero(T)
                 $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
                               xᵢ = x_new[i]
@@ -738,10 +760,10 @@ end
             end
             alpha, fpropose = α_2, ϕx_1
             update_state!(s, x_old, alpha)
-            ∇_old, ∇ = ∇, ∇_old
+            ∇_old, ∇_new = ∇_new, ∇_old
         end
         # return StaticOptimizationResults(NaN, N, tol, f_calls, g_calls, false), x_old
-        _sptr_, $T(NaN)
+        $T(NaN)
     end
 end
 
