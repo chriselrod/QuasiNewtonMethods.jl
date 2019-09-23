@@ -3,6 +3,7 @@ module QuasiNewtonMethods
 using   SIMDPirates,
     PaddedMatrices,
     Parameters,
+    LoopVectorization,
     LinearAlgebra,
     VectorizationBase,
     StackPointers
@@ -188,7 +189,7 @@ struct BackTracking{O}
     iterations::Int
 end
 function BackTracking(::Val{O} = Val(3); c_1 = 1e-4, ρ_hi = 0.5, ρ_lo = 0.1, iterations = 1_000) where {O}
-    BackTracking{O}(c_1, ρ_hi, ρ_lo, iterations, maxstep)
+    BackTracking{O}(c_1, ρ_hi, ρ_lo, iterations)
 end
 
 abstract type AbstractBFGSState{P,T,L,LT} end
@@ -624,19 +625,16 @@ x_old will be overwritten by the final final position, and ∇ by the final grad
         # copyto!(x_old, x)
         initial_invH!(invH)
         c_1, ρ_hi, ρ_lo, iterations = T(ls.c_1), T(ls.ρ_hi), T(ls.ρ_lo), ls.iterations
-        iterfinitemax = $(round(Int,-log2(eps(T))))
         sqrttol = $(Base.FastMath.sqrt_fast(eps(T)))
         α_0 = one($T)
         # N = 200
         # f_calls = 0
         # g_calls = 0
+        # @show x_old
+        nϕ_0 = init_nϕ_0 ≡ nothing ? logdensity_and_gradient!(∇, obj, x_old, _sptr) : init_nϕ_0
         @fastmath for n ∈ 1:N
-            if init_nϕ_0 === nothing || n > 1
-                nϕ_0 = logdensity_and_gradient!(∇, obj, x_old, _sptr)#; f_calls +=1; g_calls +=1;
-            else
-                nϕ_0 = init_nϕ_0
-            end
-            isfinite(ϕ_0) || return $T(NaN)
+            # @show nϕ_0
+            isfinite(nϕ_0) || return $T(NaN)
             ϕ_0 = zero($T)
             vmaxabs∇ = vbroadcast(Vec{$W,$T}, zero($T))
             $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
@@ -647,7 +645,11 @@ x_old will be overwritten by the final final position, and ∇ by the final grad
                 ∇_new[i] = ∇ᵢ
                 vmaxabs∇ = SIMDPirates.vmax(SIMDPirates.vabs(∇ᵢ),vmaxabs∇)
             end end))
-            vany(SIMDPirates.vgreater(vmaxabs∇, tol)) && return nϕ_0
+            # ϕ_0 = $(T(0.5)) * ϕ_0 - nϕ_0
+            # @show ϕ_0
+            # @show ∇_new
+            # @show vmaxabs∇
+            SIMDPirates.vany(SIMDPirates.vgreater(vmaxabs∇, tol)) || return nϕ_0
             ϕ_0 = $(T(0.5)) * ϕ_0 - nϕ_0
             if n > 1 # update hessian
                 dx_dg = zero($T)
@@ -688,16 +690,18 @@ x_old will be overwritten by the final final position, and ∇ by the final grad
             # SIMDArrays.vadd!(x_new, x_old, α_1, s)
             # ϕx_1 = f(x + α_1*s); f_calls += 1;
             nϕx_1 = logdensity(obj, x_new, _sptr)#; f_calls += 1;
-
+            # @show nϕx_1
             # Hard-coded backtrack until we find a finite function value
             iterfinite = 0
-            while !isfinite(nϕx_1) && iterfinite < iterfinitemax
+            while !isfinite(nϕx_1) && iterfinite < $(round(Int,-log2(eps(T))))
                 iterfinite += 1
                 α_1 = α_2
                 α_2 = T(0.5)*α_1
                 @inbounds @simd for i ∈ 1:$L
                     x_new[i] = x_old[i] + α_2*s[i]
                 end
+                # @show iterfinite
+                # @show x_new
                 # SIMDArrays.vadd!(x_new, x_old, α_2, s)
                 # ϕx_1 = f(x + α_2*s); f_calls += 1;
                 nϕx_1 = logdensity(obj, x_new, _sptr)#; f_calls += 1;
@@ -712,7 +716,7 @@ x_old will be overwritten by the final final position, and ∇ by the final grad
             while ϕx_1 > ϕ_0 + c_1 * α_2 * dϕ_0
                 # Increment the number of steps we've had to perform
                 iteration += 1
-
+                # @show iteration, iterations
                 # Ensure termination
                 iteration > iterations && return $T(NaN) # linesearch_failure(iterations)
 
@@ -761,9 +765,16 @@ x_old will be overwritten by the final final position, and ∇ by the final grad
             alpha, fpropose = α_2, ϕx_1
             update_state!(s, x_old, alpha)
             ∇_old, ∇_new = ∇_new, ∇_old
+            nϕ_0 = logdensity_and_gradient!(∇, obj, x_old, _sptr)#; f_calls +=1; g_calls +=1;
+# println("at end, nϕ_0: $nϕ_0")
+# @show x_old
+# @show x_new
+# @show reinterpret(Int,pointer(x_new)) - reinterpret(Int,pointer(x_old))
         end
+        # println("Reached maximum number of iterations: $N.")
         # return StaticOptimizationResults(NaN, N, tol, f_calls, g_calls, false), x_old
-        $T(NaN)
+        # $T(NaN)
+        nϕ_0
     end
 end
 
