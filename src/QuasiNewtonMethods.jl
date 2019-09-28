@@ -8,10 +8,10 @@ using   SIMDPirates,
     VectorizationBase,
     StackPointers
 
-using PaddedMatrices: AbstractMutableFixedSizePaddedVector,
-    AbstractMutableFixedSizePaddedMatrix,
-    AbstractFixedSizePaddedArray,
-    AbstractFixedSizePaddedVector
+using PaddedMatrices: AbstractMutableFixedSizeVector,
+    AbstractMutableFixedSizeMatrix,
+    AbstractFixedSizeArray,
+    AbstractFixedSizeVector
 
 export optimize!
 
@@ -30,67 +30,6 @@ abstract type AbstractProbabilityModel{D} end# <: LogDensityProblems.AbstractLog
 dimension(::AbstractProbabilityModel{D}) where {D} = PaddedMatrices.Static{D}()
 Base.length(::AbstractProbabilityModel{D}) where {D} = D
 
-#=
-function BFGS_update_quote(R,stride,T)
-    W, rows, cols, row_reps_per_kernel = PaddedMatrices.pick_kernel_size(T, R, R)
-    V = Vec{W,T}
-    common = quote
-        vC1 = vbroadcast($V, c1)
-        vC2 = vbroadcast($V, -c2)
-        ptr_invH, ptr_S, ptr_U = pointer(invH), pointer(s), pointer(u)
-    end
-    rowreps, rowrem = divrem(stride, rows)
-    colreps, colrem = divrem(R, rows)
-    
-    
-end
-function BFGS_update_block_quote(W, T, row_iter, col_iter, stride)
-    V = Vec{W,T}
-    size_T = sizeof(T)
-    WT = size_T*W
-    q = quote end
-    for c ∈ 0:col_iter-1
-    end
-    for r ∈ 0:row_iter-1
-        row_setup = quote
-            $(Symbol(:vU_,r)) = vload($V, ptr_U + $WT*$r)
-            $(Symbol(:vS_,r)) = vload($V, ptr_S + $WT*$r)
-        end
-        push!(q.args, row_setup)
-    end
-    for c ∈ 0:col_iter-1
-        vSB_c = $(Symbol(:vSb_,c))
-        vSBc1 = $(Symbol(:vSbc1_,c))
-        vSBc2 = $(Symbol(:vSbc2_,c))
-        vUbc2 = $(Symbol(:vUBc_,c))
-        col_setup = quote
-            $vSB_c = vbroadcast($V, VectorizationBase.load(ptr_S + $c*$size_T ))
-            $vSBc1 = vmul($vSb_c, vC1)
-            $vSBc2 = vmul($vSb_c, vC2)
-            $vUBc2 = vmul(vbroadcast($V, VectorizationBase.load(ptr_U + $c*$size_T )), vC2)
-        end
-        push!(q.args, col_setup)
-        for r ∈ 0:row_iter-1
-            push!(q.args, Expr(:(=), Symbol(:invH_,r,:_,c), :(vload($V, ptr_invH + $WT*$r + $stride*$c))))
-        end
-        for r ∈ 0:row_iter-1
-            invHrc = Symbol(:invH_,r,:_,c)
-            push!(q.args, :($invHrc = vmuladd($(Symbol(:vU_,r)),$vSBc2,$invHrc)))
-        end
-        for r ∈ 0:row_iter-1
-            invHrc = Symbol(:invH_,r,:_,c)
-            push!(q.args, :($invHrc = vmuladd($(Symbol(:vS_,r)),$vUBc2,$invHrc)))
-        end
-        for r ∈ 0:row_iter-1
-            invHrc = Symbol(:invH_,r,:_,c)
-            push!(q.args, :($invHrc = vmuladd($(Symbol(:vS_,r)),$vSBc1,$invHrc)))
-        end
-        for r ∈ 0:row_iter-1
-            push!(q.args, :(vstore!(ptr_invH + $WT*$r + $stride*$c, $(Symbol(:invH_,r,:_,c)))))
-        end
-    end
-end
-=#
 function bfgs_column_update_block(W, T, row_iter, stride, c, ptr_S = :ptr_S, ptr_U = :ptr_U)
     V = Vec{W,T}
     WT = sizeof(T)*W
@@ -173,8 +112,8 @@ function BFGS_update_quote(R,stride,T)
     end
 end
 
-@generated function BFGS_update!(invH::Union{Symmetric{T,<:AbstractMutableFixedSizePaddedMatrix{P,P,T,R,L}},<:AbstractMutableFixedSizePaddedMatrix{P,P,T,R,L}},
-    s::AbstractMutableFixedSizePaddedVector{P,T,R}, u::AbstractMutableFixedSizePaddedVector{P,T,R}, c1::T, c2::T) where {P,T,L,R}
+@generated function BFGS_update!(invH::Union{Symmetric{T,<:AbstractMutableFixedSizeMatrix{P,P,T,R,L}},<:AbstractMutableFixedSizeMatrix{P,P,T,R,L}},
+    s::AbstractMutableFixedSizeVector{P,T,R}, u::AbstractMutableFixedSizeVector{P,T,R}, c1::T, c2::T) where {P,T,L,R}
 
     BFGS_update_quote(P,R,T)
 
@@ -195,14 +134,14 @@ end
 abstract type AbstractBFGSState{P,T,L,LT} end
 
 mutable struct BFGSState{P,T,L,LT} <: AbstractBFGSState{P,T,L,LT}
-    x_old::ConstantFixedSizePaddedVector{P,T,L,L}
-    invH::ConstantFixedSizePaddedMatrix{P,P,T,L,LT}
-    x_new::ConstantFixedSizePaddedVector{P,T,L,L}
-    ∇_old::ConstantFixedSizePaddedVector{P,T,L,L}
-    δ∇::ConstantFixedSizePaddedVector{P,T,L,L}
-    u::ConstantFixedSizePaddedVector{P,T,L,L}
-    s::ConstantFixedSizePaddedVector{P,T,L,L}
-    ∇::ConstantFixedSizePaddedVector{P,T,L,L}
+    x_old::ConstantFixedSizeVector{P,T,L,L}
+    invH::ConstantFixedSizeMatrix{P,P,T,L,LT}
+    x_new::ConstantFixedSizeVector{P,T,L,L}
+    ∇_old::ConstantFixedSizeVector{P,T,L,L}
+    δ∇::ConstantFixedSizeVector{P,T,L,L}
+    u::ConstantFixedSizeVector{P,T,L,L}
+    s::ConstantFixedSizeVector{P,T,L,L}
+    ∇::ConstantFixedSizeVector{P,T,L,L}
     function BFGSState{P,T,L,LT}(::UndefInitializer) where {P,T,L,LT}
         new{P,T,L,LT}()
     end
@@ -222,14 +161,14 @@ BFGSState(::Val{P}, ::Type{T} = Float64) where {P,T} = BFGSState{P,T}(undef)
 This type exists primarily to be the field of another mutable struct, so that you can get a pointer to this object.
 """
 struct ConstantBFGSState{P,T,L,LT} <: AbstractBFGSState{P,T,L,LT}
-    invH::ConstantFixedSizePaddedMatrix{P,P,T,L,LT}
-    x_old::ConstantFixedSizePaddedVector{P,T,L,L}
-    x_new::ConstantFixedSizePaddedVector{P,T,L,L}
-    ∇_old::ConstantFixedSizePaddedVector{P,T,L,L}
+    invH::ConstantFixedSizeMatrix{P,P,T,L,LT}
+    x_old::ConstantFixedSizeVector{P,T,L,L}
+    x_new::ConstantFixedSizeVector{P,T,L,L}
+    ∇_old::ConstantFixedSizeVector{P,T,L,L}
     # ∇_new::SizedSIMDVector{P,T,L}
-    δ∇::ConstantFixedSizePaddedVector{P,T,L,L}
-    u::ConstantFixedSizePaddedVector{P,T,L,L}
-    s::ConstantFixedSizePaddedVector{P,T,L,L}
+    δ∇::ConstantFixedSizeVector{P,T,L,L}
+    u::ConstantFixedSizeVector{P,T,L,L}
+    s::ConstantFixedSizeVector{P,T,L,L}
 end=#
 struct PtrBFGSState{P,T,L,LT} <: AbstractBFGSState{P,T,L,LT}
     ptr::Ptr{T}
@@ -246,7 +185,7 @@ end
 @inline ref_s(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+5L)*sizeof(T))
 @inline ref_∇(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+6L)*sizeof(T))
 
-function initial_invH!(invH::PaddedMatrices.AbstractFixedSizePaddedMatrix{P,P,T}) where {P,T}
+function initial_invH!(invH::PaddedMatrices.AbstractFixedSizeMatrix{P,P,T}) where {P,T}
     fill!(invH, zero(T))
     @inbounds for p = 1:P
         invH[p,p] = one(T)
@@ -260,7 +199,7 @@ nanmin(a, b) = a < b ? a : (isnan(b) ? a : b)
 nanmax(a, b) = a < b ? b : (isnan(a) ? b : a)
 
 
-@generated function update_state!(C::AbstractFixedSizePaddedArray{S,T,N,R,L}, B::AbstractFixedSizePaddedArray{S,T,N,R,L}, α::T) where {S,T,N,R,L}
+@generated function update_state!(C::AbstractFixedSizeArray{S,T,N,R,L}, B::AbstractFixedSizeArray{S,T,N,R,L}, α::T) where {S,T,N,R,L}
     T_size = sizeof(T)
     VL = min(VectorizationBase.REGISTER_SIZE ÷ T_size, L)
     VLT = VL * T_size
@@ -319,7 +258,7 @@ end
 """
 Optimum value is stored in state.x_old.
 """
-function optimize!(state, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls::BackTracking{order} = BackTracking(), tol = 1e-8) where {P,T,L,order}
+function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracking{order} = BackTracking(), tol = 1e-8) where {P,T,L,order}
     x_old = ref_x_old(state)
     ∇_old = ref_∇_old(state)
     invH = ref_invH(state)
@@ -335,10 +274,10 @@ function optimize!(state, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls::Back
     sqrttol = sqrt(eps(T))
     α_0 = one(T)
     N = 200
-    f_calls = 0
-    g_calls = 0
+    # f_calls = 0
+    # g_calls = 0
     @fastmath for n ∈ 1:N
-        ϕ_0 = - logdensity_and_gradient!(∇, obj, x_old); f_calls +=1; g_calls +=1;
+        ϕ_0 = - logdensity_and_gradient!(∇, obj, x_old)#; f_calls +=1; g_calls +=1;
         isfinite(ϕ_0) || return T(NaN)
         if maximum(abs, ∇) < tol
             if pointer(∇) != pointer(ref_∇(state))
@@ -382,9 +321,7 @@ function optimize!(state, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls::Back
         @inbounds @simd for i ∈ 1:L
             x_new[i] = x_old[i] + α_1*s[i]
         end
-        # SIMDArrays.vadd!(x_new, x_old, α_1, s)
-        # ϕx_1 = f(x + α_1*s); f_calls += 1;
-        ϕx_1 = -logdensity(obj, x_new); f_calls += 1;
+        ϕx_1 = -logdensity(obj, x_new)#; f_calls += 1;
 
         # Hard-coded backtrack until we find a finite function value
         iterfinite = 0
@@ -395,9 +332,7 @@ function optimize!(state, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls::Back
             @inbounds @simd for i ∈ 1:L
                 x_new[i] = x_old[i] + α_2*s[i]
             end
-            # SIMDArrays.vadd!(x_new, x_old, α_2, s)
-            # ϕx_1 = f(x + α_2*s); f_calls += 1;
-            ϕx_1 = -logdensity(obj, x_new); f_calls += 1;
+            ϕx_1 = -logdensity(obj, x_new)#; f_calls += 1;
         end
 
         # Backtrack until we satisfy sufficient decrease condition
@@ -442,23 +377,19 @@ function optimize!(state, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls::Back
             @inbounds @simd for i ∈ 1:L
                 x_new[i] = x_old[i] + α_2*s[i]
             end
-            # SIMDArrays.vadd!(x_new, x_old, α_2, s)
-            ϕx_0, ϕx_1 = ϕx_1, -logdensity(obj, x_new); f_calls += 1;
+            ϕx_0, ϕx_1 = ϕx_1, -logdensity(obj, x_new)#; f_calls += 1;
         end
         alpha, fpropose = α_2, ϕx_1
         update_state!(s, x_old, alpha)
         ∇_old, ∇ = ∇, ∇_old
-#        copyto!(∇_old, ∇)
-
     end
-    # return StaticOptimizationResults(NaN, N, tol, f_calls, g_calls, false), x_old
     T(NaN)
 end
 
 """
 Optimum value is stored in state.x_old.
 """
-@generated function optimize!(_sptr_::StackPointer, obj, x::AbstractFixedSizePaddedVector{P,T,L}, ls::BackTracking{order} = BackTracking(), tol = 1e-8) where {P,T,L,order}
+@generated function optimize!(_sptr_::StackPointer, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracking{order} = BackTracking(), tol = 1e-8) where {P,T,L,order}
     quote
         sptr, x_old = PtrVector{$P,$T}(_sptr_)
         sptr, ∇ = PtrVector{$P,$T}(sptr)
@@ -476,10 +407,10 @@ Optimum value is stored in state.x_old.
         sqrttol = $(Base.FastMath.sqrt_fast(eps(T)))
         α_0 = one($T)
         N = 200
-        f_calls = 0
-        g_calls = 0
+        # f_calls = 0
+        # g_calls = 0
         @fastmath for n ∈ 1:N
-            ϕ_0 = - logdensity_and_gradient!(∇, obj, x_old, _sptr); f_calls +=1; g_calls +=1;
+            ϕ_0 = - logdensity_and_gradient!(∇, obj, x_old, _sptr)#; f_calls +=1; g_calls +=1;
             isfinite(ϕ_0) || return _sptr_, $T(NaN)
             if maximum(abs, ∇) < tol
                 if pointer(∇) != ptr_∇
@@ -523,9 +454,7 @@ Optimum value is stored in state.x_old.
             @inbounds @simd for i ∈ 1:$L
                 x_new[i] = x_old[i] + α_1*s[i]
             end
-            # SIMDArrays.vadd!(x_new, x_old, α_1, s)
-            # ϕx_1 = f(x + α_1*s); f_calls += 1;
-            ϕx_1 = -logdensity(obj, x_new, _sptr); f_calls += 1;
+            ϕx_1 = -logdensity(obj, x_new, _sptr)#; f_calls += 1;
 
             # Hard-coded backtrack until we find a finite function value
             iterfinite = 0
@@ -537,8 +466,7 @@ Optimum value is stored in state.x_old.
                     x_new[i] = x_old[i] + α_2*s[i]
                 end
                 # SIMDArrays.vadd!(x_new, x_old, α_2, s)
-                # ϕx_1 = f(x + α_2*s); f_calls += 1;
-                ϕx_1 = -logdensity(obj, x_new, _sptr); f_calls += 1;
+                ϕx_1 = -logdensity(obj, x_new, _sptr)#; f_calls += 1;
             end
 
             # Backtrack until we satisfy sufficient decrease condition
@@ -579,17 +507,15 @@ Optimum value is stored in state.x_old.
                 α_2 = nanmax(α_tmp, α_2*ρ_lo) # avoid too big reductions
 
                 # Evaluate f(x) at proposed position
-                # ϕx_0, ϕx_1 = ϕx_1, f(x + α_2*s); f_calls += 1;
                 @inbounds @simd for i ∈ 1:$L
                     x_new[i] = x_old[i] + α_2*s[i]
                 end
-                ϕx_0, ϕx_1 = ϕx_1, -logdensity(obj, x_new, _sptr); f_calls += 1;
+                ϕx_0, ϕx_1 = ϕx_1, -logdensity(obj, x_new, _sptr)#; f_calls += 1;
             end
             alpha, fpropose = α_2, ϕx_1
             update_state!(s, x_old, alpha)
             ∇_old, ∇ = ∇, ∇_old
         end
-        # return StaticOptimizationResults(NaN, N, tol, f_calls, g_calls, false), x_old
         _sptr_, $T(NaN)
     end
 end
@@ -612,9 +538,6 @@ x_old will be overwritten by the final final position, and ∇ by the final grad
     L = VectorizationBase.align(P, T)
     W = VectorizationBase.pick_vector_width(P, T)
     quote
-        # sptr, x_old = PtrVector{$P,$T}(_sptr_)
-        # sptr, ∇ = PtrVector{$P,$T}(sptr)
-        # ptr_∇ = pointer(∇)
         _sptr, x_new = PtrVector{$P,$T}(sptr)
         _sptr, ∇_old = PtrVector{$P,$T}(_sptr)
         _sptr, ∇_new = PtrVector{$P,$T}(_sptr)
@@ -622,14 +545,10 @@ x_old will be overwritten by the final final position, and ∇ by the final grad
         _sptr, δ∇ = PtrVector{$P,$T}(_sptr)
         _sptr, s = PtrVector{$P,$T}(_sptr)
         _sptr, u = PtrVector{$P,$T}(_sptr)
-        # copyto!(x_old, x)
         initial_invH!(invH)
         c_1, ρ_hi, ρ_lo, iterations = T(ls.c_1), T(ls.ρ_hi), T(ls.ρ_lo), ls.iterations
         sqrttol = $(Base.FastMath.sqrt_fast(eps(T)))
         α_0 = one($T)
-        # N = 200
-        # f_calls = 0
-        # g_calls = 0
         # @show x_old
         nϕ_0 = init_nϕ_0 ≡ nothing ? logdensity_and_gradient!(∇, obj, x_old, _sptr) : init_nϕ_0
         @fastmath for n ∈ 1:N
