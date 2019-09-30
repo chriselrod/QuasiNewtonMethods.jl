@@ -134,14 +134,14 @@ end
 abstract type AbstractBFGSState{P,T,L,LT} end
 
 mutable struct BFGSState{P,T,L,LT} <: AbstractBFGSState{P,T,L,LT}
-    x_old::ConstantFixedSizeVector{P,T,L,L}
+    x_old::ConstantFixedSizeVector{P,T,L}
     invH::ConstantFixedSizeMatrix{P,P,T,L,LT}
-    x_new::ConstantFixedSizeVector{P,T,L,L}
-    ∇_old::ConstantFixedSizeVector{P,T,L,L}
-    δ∇::ConstantFixedSizeVector{P,T,L,L}
-    u::ConstantFixedSizeVector{P,T,L,L}
-    s::ConstantFixedSizeVector{P,T,L,L}
-    ∇::ConstantFixedSizeVector{P,T,L,L}
+    x_new::ConstantFixedSizeVector{P,T,L}
+    ∇_old::ConstantFixedSizeVector{P,T,L}
+    δ∇::ConstantFixedSizeVector{P,T,L}
+    u::ConstantFixedSizeVector{P,T,L}
+    s::ConstantFixedSizeVector{P,T,L}
+    ∇::ConstantFixedSizeVector{P,T,L}
     function BFGSState{P,T,L,LT}(::UndefInitializer) where {P,T,L,LT}
         new{P,T,L,LT}()
     end
