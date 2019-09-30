@@ -176,14 +176,14 @@ end
 @inline Base.pointer(state::PtrBFGSState) = state.ptr
 
 
-@inline ref_x_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s))# + LT*sizeof(T))
-@inline ref_invH(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrMatrix{P,P,T,L,LT,false}(pointer(s) + L*sizeof(T))
-@inline ref_x_new(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+L)*sizeof(T))
-@inline ref_∇_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+2L)*sizeof(T))
-@inline ref_δ∇(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+3L)*sizeof(T))
-@inline ref_u(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+4L)*sizeof(T))
-@inline ref_s(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+5L)*sizeof(T))
-@inline ref_∇(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + (LT+6L)*sizeof(T))
+@inline ref_x_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s))# + LT*sizeof(T))
+@inline ref_invH(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrMatrix{P,P,T,LT,false}(pointer(s) + L*sizeof(T))
+@inline ref_x_new(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s) + (LT+L)*sizeof(T))
+@inline ref_∇_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s) + (LT+2L)*sizeof(T))
+@inline ref_δ∇(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s) + (LT+3L)*sizeof(T))
+@inline ref_u(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s) + (LT+4L)*sizeof(T))
+@inline ref_s(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s) + (LT+5L)*sizeof(T))
+@inline ref_∇(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s) + (LT+6L)*sizeof(T))
 
 function initial_invH!(invH::PaddedMatrices.AbstractFixedSizeMatrix{P,P,T}) where {P,T}
     fill!(invH, zero(T))
