@@ -197,7 +197,11 @@ end
 
 nanmin(a, b) = a < b ? a : (isnan(b) ? a : b)
 nanmax(a, b) = a < b ? b : (isnan(a) ? b : a)
-
+@inline function either_not_finite_or_op(op::F, a, b) where {F}
+    isfinite(a) || return true
+    isfinite(b) || return true
+    op(a, b)
+end
 
 @generated function update_state!(C::AbstractFixedSizeArray{S,T,N,R,L}, B::AbstractFixedSizeArray{S,T,N,R,L}, α::T) where {S,T,N,R,L}
     T_size = sizeof(T)
@@ -278,7 +282,7 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracki
     # g_calls = 0
     @fastmath for n ∈ 1:N
         ϕ_0 = - logdensity_and_gradient!(∇, obj, x_old)#; f_calls +=1; g_calls +=1;
-        isfinite(ϕ_0) || return T(NaN)
+        Base.isfinite(ϕ_0) || return T(NaN)
         if maximum(abs, ∇) < tol
             if pointer(∇) != pointer(ref_∇(state))
                 copyto!(∇_old, ∇)
@@ -325,7 +329,7 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracki
 
         # Hard-coded backtrack until we find a finite function value
         iterfinite = 0
-        while !isfinite(ϕx_1) && iterfinite < iterfinitemax
+        while !Base.isfinite(ϕx_1) && iterfinite < iterfinitemax
             iterfinite += 1
             α_1 = α_2
             α_2 = T(0.5)*α_1
@@ -336,7 +340,7 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracki
         end
 
         # Backtrack until we satisfy sufficient decrease condition
-        while ϕx_1 > ϕ_0 + c_1 * α_2 * dϕ_0
+        while either_not_finite_or_op(>, ϕx_1, ϕ_0 + c_1 * α_2 * dϕ_0)
             # Increment the number of steps we've had to perform
             iteration += 1
 
@@ -362,7 +366,7 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracki
                     α_tmp = dϕ_0 / (T(2)*b)
                 else
                     # discriminant
-                    d = max(b*b - T(3)*a*dϕ_0, zero(T))
+                    d = nanmax(b*b - T(3)*a*dϕ_0, zero(T))
                     # quadratic equation root
                     α_tmp = (sqrt(d) - b) / (T(3)*a)
                 end
@@ -411,7 +415,7 @@ Optimum value is stored in state.x_old.
         # g_calls = 0
         @fastmath for n ∈ 1:N
             ϕ_0 = - logdensity_and_gradient!(∇, obj, x_old, _sptr)#; f_calls +=1; g_calls +=1;
-            isfinite(ϕ_0) || return _sptr_, $T(NaN)
+            Base.isfinite(ϕ_0) || return _sptr_, $T(NaN)
             if maximum(abs, ∇) < tol
                 if pointer(∇) != ptr_∇
                     copyto!(∇_old, ∇)
@@ -458,7 +462,7 @@ Optimum value is stored in state.x_old.
 
             # Hard-coded backtrack until we find a finite function value
             iterfinite = 0
-            while !isfinite(ϕx_1) && iterfinite < iterfinitemax
+            while !Base.isfinite(ϕx_1) && iterfinite < iterfinitemax
                 iterfinite += 1
                 α_1 = α_2
                 α_2 = T(0.5)*α_1
@@ -470,7 +474,7 @@ Optimum value is stored in state.x_old.
             end
 
             # Backtrack until we satisfy sufficient decrease condition
-            while ϕx_1 > ϕ_0 + c_1 * α_2 * dϕ_0
+            while either_not_finite_or_op(>, ϕx_1, ϕ_0 + c_1 * α_2 * dϕ_0)
                 # Increment the number of steps we've had to perform
                 iteration += 1
 
@@ -496,7 +500,7 @@ Optimum value is stored in state.x_old.
                         α_tmp = dϕ_0 / (T(2)*b)
                     else
                         # discriminant
-                        d = max(b*b - $(T(3))*a*dϕ_0, zero($T))
+                        d = nanmax(b*b - $(T(3))*a*dϕ_0, zero($T))
                         # quadratic equation root
                         α_tmp = (sqrt(d) - b) / ($(T(3))*a)
                     end
@@ -553,7 +557,7 @@ x_old will be overwritten by the final final position, and ∇ by the final grad
         nϕ_0 = init_nϕ_0 ≡ nothing ? logdensity_and_gradient!(∇, obj, x_old, _sptr) : init_nϕ_0
         @fastmath for n ∈ 1:N
             # @show nϕ_0
-            isfinite(nϕ_0) || return $T(NaN)
+            Base.isfinite(nϕ_0) || return $T(NaN)
             ϕ_0 = zero($T)
             vmaxabs∇ = vbroadcast(Vec{$W,$T}, zero($T))
             $(macroexpand(LoopVectorization, quote @vvectorize $T for i ∈ 1:$P
@@ -612,7 +616,7 @@ x_old will be overwritten by the final final position, and ∇ by the final grad
             # @show nϕx_1
             # Hard-coded backtrack until we find a finite function value
             iterfinite = 0
-            while !isfinite(nϕx_1) && iterfinite < $(round(Int,-log2(eps(T))))
+            while !Base.isfinite(nϕx_1) && iterfinite < $(round(Int,-log2(eps(T))))
                 iterfinite += 1
                 α_1 = α_2
                 α_2 = T(0.5)*α_1
@@ -632,7 +636,7 @@ x_old will be overwritten by the final final position, and ∇ by the final grad
                           end end))
             ϕx_1 = $(T(0.5))*penalty*ϕx_1 - nϕx_1
             # Backtrack until we satisfy sufficient decrease condition
-            while ϕx_1 > ϕ_0 + c_1 * α_2 * dϕ_0
+            while either_not_finite_or_op(>, ϕx_1, ϕ_0 + c_1 * α_2 * dϕ_0)
                 # Increment the number of steps we've had to perform
                 iteration += 1
                 # @show iteration, iterations
@@ -658,7 +662,7 @@ x_old will be overwritten by the final final position, and ∇ by the final grad
                         α_tmp = dϕ_0 / (T(2)*b)
                     else
                         # discriminant
-                        d = max(b*b - $(T(3))*a*dϕ_0, zero($T))
+                        d = nanmax(b*b - $(T(3))*a*dϕ_0, zero($T))
                         # quadratic equation root
                         α_tmp = (sqrt(d) - b) / ($(T(3))*a)
                     end
