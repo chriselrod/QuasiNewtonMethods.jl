@@ -13,7 +13,7 @@ using PaddedMatrices: AbstractMutableFixedSizeVector,
     AbstractFixedSizeArray,
     AbstractFixedSizeVector
 
-export optimize!
+export optimize!, proptimize!
 
 """
 To find a mode, define methods for `logdensity` and logdensity_and_gradient!` dispatching on obj, and evaluating at the position `q`.
