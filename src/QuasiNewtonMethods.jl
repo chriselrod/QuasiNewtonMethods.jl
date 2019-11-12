@@ -29,6 +29,9 @@ function logdensity_and_gradient! end
 abstract type AbstractProbabilityModel{D} end# <: LogDensityProblems.AbstractLogDensityProblem end
 dimension(::AbstractProbabilityModel{D}) where {D} = PaddedMatrices.Static{D}()
 Base.length(::AbstractProbabilityModel{D}) where {D} = D
+function Base.show(io::IO, ℓ::AbstractProbabilityModel{D}) where {D}
+    print(io, "$D-dimensional Probability Model")
+end
 
 function bfgs_column_update_block(W, T, row_iter, stride, c, ptr_S = :ptr_S, ptr_U = :ptr_U)
     V = Vec{W,T}
