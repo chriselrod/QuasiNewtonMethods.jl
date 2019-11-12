@@ -5,15 +5,15 @@ uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 
 [[CSTParser]]
 deps = ["Tokenize"]
-git-tree-sha1 = "c69698c3d4a7255bc1b4bc2afc09f59db910243b"
+git-tree-sha1 = "99dda94f5af21a4565dc2b97edf6a95485f116c3"
 uuid = "00ebfdb7-1f24-5e51-bd34-a7502290713f"
-version = "0.6.2"
+version = "1.0.0"
 
 [[Compat]]
 deps = ["Base64", "Dates", "DelimitedFiles", "Distributed", "InteractiveUtils", "LibGit2", "Libdl", "LinearAlgebra", "Markdown", "Mmap", "Pkg", "Printf", "REPL", "Random", "Serialization", "SharedArrays", "Sockets", "SparseArrays", "Statistics", "Test", "UUIDs", "Unicode"]
-git-tree-sha1 = "84aa74986c5b9b898b0d1acaf3258741ee64754f"
+git-tree-sha1 = "ed2c4abadf84c53d9e58510b5fc48912c2336fbb"
 uuid = "34da2185-b29b-5c13-b0c7-acf172513d20"
-version = "2.1.0"
+version = "2.2.0"
 
 [[CpuId]]
 deps = ["Markdown", "Test"]
@@ -23,9 +23,9 @@ version = "0.2.2"
 
 [[DataStructures]]
 deps = ["InteractiveUtils", "OrderedCollections"]
-git-tree-sha1 = "0809951a1774dc724da22d26e4289bbaab77809a"
+git-tree-sha1 = "1fe8fad5fc84686dcbc674aa255bc867a64f8132"
 uuid = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
-version = "0.17.0"
+version = "0.17.5"
 
 [[Dates]]
 deps = ["Printf"]
@@ -44,6 +44,7 @@ deps = ["Markdown"]
 uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 
 [[LibGit2]]
+deps = ["Printf"]
 uuid = "76f85450-5226-5b5a-8eaa-529ad045b433"
 
 [[Libdl]]
@@ -82,7 +83,7 @@ uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 version = "1.1.0"
 
 [[PaddedMatrices]]
-deps = ["LinearAlgebra", "LoopVectorization", "MacroTools", "Parameters", "Random", "SIMDPirates", "SLEEFPirates", "StackPointers", "VectorizationBase", "VectorizedRNG"]
+deps = ["LinearAlgebra", "LoopVectorization", "MacroTools", "Parameters", "Random", "ReverseDiffExpressionsBase", "SIMDPirates", "SLEEFPirates", "StackPointers", "VectorizationBase", "VectorizedRNG"]
 path = "/home/chriselrod/.julia/dev/PaddedMatrices"
 uuid = "1f4db776-fdbc-11e8-06f3-e1707b8b4170"
 version = "0.1.0"
@@ -108,6 +109,12 @@ uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
 [[Random]]
 deps = ["Serialization"]
 uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+
+[[ReverseDiffExpressionsBase]]
+deps = ["SIMDPirates", "StackPointers", "VectorizationBase"]
+path = "/home/chriselrod/.julia/dev/ReverseDiffExpressionsBase"
+uuid = "6c4e8705-acc8-45e6-99c7-2e34d4f10b96"
+version = "0.1.0"
 
 [[SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
