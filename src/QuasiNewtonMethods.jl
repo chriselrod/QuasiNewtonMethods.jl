@@ -705,6 +705,8 @@ x_old will be overwritten by the final final position, and ∇ by the final grad
 end
 
 
+include("precompile.jl")
+_precompile_()
 
 
 end # module
