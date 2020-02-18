@@ -1,6 +1,6 @@
 module QuasiNewtonMethods
 
-using   SIMDPirates,
+using SIMDPirates,
     PaddedMatrices,
     Parameters,
     LoopVectorization,
@@ -8,8 +8,8 @@ using   SIMDPirates,
     VectorizationBase,
     StackPointers
 
-using PaddedMatrices: AbstractMutableFixedSizeVector,
-    AbstractMutableFixedSizeMatrix,
+using PaddedMatrices: AbstractFixedSizeVector,
+    AbstractFixedSizeMatrix,
     AbstractFixedSizeArray,
     AbstractFixedSizeVector
 
@@ -35,19 +35,18 @@ end
 
 function bfgs_column_update_block(W, T, row_iter, stride, c, ptr_S = :ptr_S, ptr_U = :ptr_U)
     V = Vec{W,T}
-    WT = sizeof(T)*W
     q = quote end
     for r ∈ 0:row_iter-1
-        push!(q.args, :($(Symbol(:invH_,r)) = vload($V, ptr_invH + $WT*$r + $stride*$c)))
-        push!(q.args, :($(Symbol(:vU_,r)) = vload($V, $ptr_U + $WT*$r)))
+        push!(q.args, :($(Symbol(:invH_,r)) = vload($V, gep(ptr_invH, $W*$r + $stride*$c))))
+        push!(q.args, :($(Symbol(:vU_,r)) = vload($V, gep($ptr_U, $W*$r))))
     end
     for r ∈ 0:row_iter-1
         invHrc = Symbol(:invH_,r)
-        push!(q.args, :($(Symbol(:vS_,r)) = vload($V, $ptr_S + $WT*$r)))
+        push!(q.args, :($(Symbol(:vS_,r)) = vload($V, gep($ptr_S, $W*$r))))
         push!(q.args, :($invHrc = vmuladd($(Symbol(:vU_,r)),vSbc2,$invHrc)))
     end
     for r ∈ 0:row_iter-1
-        invHrc = Symbol(:invH_,r)
+        invHrc = 
         push!(q.args, :($invHrc = vmuladd($(Symbol(:vS_,r)),vUbc2,$invHrc)))
     end
     for r ∈ 0:row_iter-1
@@ -55,7 +54,7 @@ function bfgs_column_update_block(W, T, row_iter, stride, c, ptr_S = :ptr_S, ptr
         push!(q.args, :($invHrc = vmuladd($(Symbol(:vS_,r)),vSbc1,$invHrc)))
     end
     for r ∈ 0:row_iter-1
-        push!(q.args, :(vstore!(ptr_invH + $WT*$r + $stride*$c, $(Symbol(:invH_,r)))))
+        push!(q.args, :(vstore!(gep(ptr_invH, $W*$r + $stride*$c), $(Symbol(:invH_,r)))))
     end
     q
 end
@@ -65,7 +64,6 @@ function BFGS_update_quote(R,stride,T)
     W, Wshift = VectorizationBase.pick_vector_width_shift(R, T)
     size_T = sizeof(T)
     stride_bytes = stride * size_T
-    WT = W * size_T
     Q = stride >> Wshift
     if Q > 0
         stride & (W-1) == 0 || throw("Number of rows plus padding $stride_AD not a multiple of register size: $(VectorizationBase.REGISTER_SIZE).")
@@ -88,7 +86,7 @@ function BFGS_update_quote(R,stride,T)
             ptrS_rb = ptr_S; ptrU_rb = ptr_U
             for rb ∈ 0:$(qreps-1)
                 $(bfgs_column_update_block(W, T, rr, stride_bytes, :c, :ptrS_rb, :ptrU_rb))
-                ptrS_rb += $WT*$rr; ptrU_rb += $WT*$rr
+                ptrS_rb = gep(ptrS_rb, $W*$rr); ptrU_rb = gep(ptrU_rb, $W*$rr)
             end
         end
         push!(row_block.args, bfgs_column_update_block(W, T, qrem, stride_bytes, :c, :ptrS_rb, :ptrU_rb))
@@ -96,7 +94,7 @@ function BFGS_update_quote(R,stride,T)
         row_block = quote
             ptrS_rb = ptr_S; ptrU_rb = ptr_U
             $(bfgs_column_update_block(W, T, rr, stride_bytes, :c, :ptrS_rb, :ptrU_rb))
-            ptrS_rb += $WT*$rr; ptrU_rb += $WT*$rr
+            ptrS_rb = gep(ptrS_rb, $W*$rr); ptrU_rb = gep(ptrU_rb, $W*$rr)
             $(bfgs_column_update_block(W, T, qrem, stride_bytes, :c, :ptrS_rb, :ptrU_rb))
         end
     else
@@ -105,24 +103,22 @@ function BFGS_update_quote(R,stride,T)
     quote
         $common
         for c ∈ 0:$(R-1)
-            vSb = vbroadcast($V, VectorizationBase.load(ptr_S + c*$size_T ))
+            vSb = vbroadcast($V, VectorizationBase.load(gep(ptr_S, c )))
             vSbc1 = vmul(vSb, vC1)
             vSbc2 = vmul(vSb, vC2)
-            vUbc2 = vmul(vbroadcast($V, VectorizationBase.load(ptr_U + c*$size_T )), vC2)
+            vUbc2 = vmul(vbroadcast($V, VectorizationBase.load(gep(ptr_U, c ))), vC2)
             $row_block
         end
         nothing
     end
 end
 
-@generated function BFGS_update!(invH::Union{Symmetric{T,<:AbstractMutableFixedSizeMatrix{P,P,T,R,L}},<:AbstractMutableFixedSizeMatrix{P,P,T,R,L}},
-    s::AbstractMutableFixedSizeVector{P,T,R}, u::AbstractMutableFixedSizeVector{P,T,R}, c1::T, c2::T) where {P,T,L,R}
-
+@generated function BFGS_update!(
+    invH::Union{Symmetric{T,<:AbstractFixedSizeMatrix{P,P,T,R,L}},<:AbstractFixedSizeMatrix{P,P,T,R,L}},
+    s::AbstractFixedSizeVector{P,T,R}, u::AbstractFixedSizeVector{P,T,R}, c1::T, c2::T
+) where {P,T,L,R}
     BFGS_update_quote(P,R,T)
-
 end
-
-
 
 struct BackTracking{O}
     c_1::Float64
@@ -130,7 +126,7 @@ struct BackTracking{O}
     ρ_lo::Float64
     iterations::Int
 end
-function BackTracking(::Val{O} = Val(3); c_1 = 1e-4, ρ_hi = 0.5, ρ_lo = 0.1, iterations = 1_000) where {O}
+function BackTracking(::Val{O} = Val{3}(); c_1 = 1e-4, ρ_hi = 0.5, ρ_lo = 0.1, iterations = 1_000) where {O}
     BackTracking{O}(c_1, ρ_hi, ρ_lo, iterations)
 end
 
@@ -138,13 +134,13 @@ abstract type AbstractBFGSState{P,T,L,LT} end
 
 mutable struct BFGSState{P,T,L,LT} <: AbstractBFGSState{P,T,L,LT}
     x_old::ConstantFixedSizeVector{P,T,L}
-    invH::ConstantFixedSizeMatrix{P,P,T,L,LT}
     x_new::ConstantFixedSizeVector{P,T,L}
     ∇_old::ConstantFixedSizeVector{P,T,L}
     δ∇::ConstantFixedSizeVector{P,T,L}
     u::ConstantFixedSizeVector{P,T,L}
     s::ConstantFixedSizeVector{P,T,L}
     ∇::ConstantFixedSizeVector{P,T,L}
+    invH::ConstantFixedSizeMatrix{P,P,T,L,LT}
     function BFGSState{P,T,L,LT}(::UndefInitializer) where {P,T,L,LT}
         new{P,T,L,LT}()
     end
@@ -164,43 +160,52 @@ BFGSState(::Val{P}, ::Type{T} = Float64) where {P,T} = BFGSState{P,T}(undef)
 This type exists primarily to be the field of another mutable struct, so that you can get a pointer to this object.
 """
 struct ConstantBFGSState{P,T,L,LT} <: AbstractBFGSState{P,T,L,LT}
+    x_old::ConstantFixedSizeVector{P,T,L}
     invH::ConstantFixedSizeMatrix{P,P,T,L,LT}
-    x_old::ConstantFixedSizeVector{P,T,L,L}
-    x_new::ConstantFixedSizeVector{P,T,L,L}
-    ∇_old::ConstantFixedSizeVector{P,T,L,L}
-    # ∇_new::SizedSIMDVector{P,T,L}
-    δ∇::ConstantFixedSizeVector{P,T,L,L}
-    u::ConstantFixedSizeVector{P,T,L,L}
-    s::ConstantFixedSizeVector{P,T,L,L}
+    x_new::ConstantFixedSizeVector{P,T,L}
+    ∇_old::ConstantFixedSizeVector{P,T,L}
+    δ∇::ConstantFixedSizeVector{P,T,L}
+    u::ConstantFixedSizeVector{P,T,L}
+    s::ConstantFixedSizeVector{P,T,L}
+    ∇::ConstantFixedSizeVector{P,T,L}
 end=#
-struct PtrBFGSState{P,T,L,LT} <: AbstractBFGSState{P,T,L,LT}
+struct PtrBFGSState{P,T,L,LT,NI<:Union{Int,Nothing}} <: AbstractBFGSState{P,T,L,LT}
     ptr::Ptr{T}
+    offset::NI
 end
 @inline Base.pointer(state::PtrBFGSState) = state.ptr
 
+using VectorizationBase: gepbyte
+@inline ref_x_old(s::AbstractBFGSState) = PtrVector{P,T,L,false}(pointer(s))
+@inline ref_x_new(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 2)))
+@inline ref_∇_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 3)))
+@inline ref_δ∇(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 5)))
+@inline ref_u(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 5)))
+@inline ref_s(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 6)))
+@inline ref_∇(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 7)))
+@inline ref_invH(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrMatrix{P,P,T,LT,false}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 8)))
 
-@inline ref_x_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s))# + LT*sizeof(T))
-@inline ref_invH(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrMatrix{P,P,T,LT,false}(pointer(s) + L*sizeof(T))
-@inline ref_x_new(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s) + (LT+L)*sizeof(T))
-@inline ref_∇_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s) + (LT+2L)*sizeof(T))
-@inline ref_δ∇(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s) + (LT+3L)*sizeof(T))
-@inline ref_u(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s) + (LT+4L)*sizeof(T))
-@inline ref_s(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s) + (LT+5L)*sizeof(T))
-@inline ref_∇(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,false}(pointer(s) + (LT+6L)*sizeof(T))
+@inline ref_x_new(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrVector{P,T,L,false}(gep(pointer(s), s.offset))
+@inline ref_∇_old(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrVector{P,T,L,false}(gep(pointer(s), 2s.offset))
+@inline ref_δ∇(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrVector{P,T,L,false}(gep(pointer(s), 3s.offset))
+@inline ref_u(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrVector{P,T,L,false}(gep(pointer(s), 4s.offset))
+@inline ref_s(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrVector{P,T,L,false}(gep(pointer(s), 5s.offset))
+@inline ref_∇(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrVector{P,T,L,false}(gep(pointer(s), 6s.offset))
+@inline ref_invH(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrMatrix{P,P,T,LT,false}(gep(pointer(s), 7s.offset))
 
 function initial_invH!(invH::PaddedMatrices.AbstractFixedSizeMatrix{P,P,T}) where {P,T}
     fill!(invH, zero(T))
-    @inbounds for p = 1:P
+    @avx for p = size(invH,1)
         invH[p,p] = one(T)
     end
 end
-@inline optimum(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P,T,L,L,false}(pointer(s) + LT*sizeof(T))
+@inline optimum(s::AbstractBFGSState) = ref_x_old(s)
 
 @noinline linesearch_failure(iterations) = error("Linesearch failed to converge, reached maximum iterations $(iterations).")
 
 nanmin(a, b) = a < b ? a : (isnan(b) ? a : b)
 nanmax(a, b) = a < b ? b : (isnan(a) ? b : a)
-@inline function either_not_finite_or_op(op::F, a, b) where {F}
+@inline function either_not_finite_else_op(op::F, a, b) where {F}
     isfinite(a) || return true
     isfinite(b) || return true
     op(a, b)
@@ -209,7 +214,6 @@ end
 @generated function update_state!(C::AbstractFixedSizeArray{S,T,N,R,L}, B::AbstractFixedSizeArray{S,T,N,R,L}, α::T) where {S,T,N,R,L}
     T_size = sizeof(T)
     VL = min(VectorizationBase.REGISTER_SIZE ÷ T_size, L)
-    VLT = VL * T_size
     V = Vec{VL,T}
     iter = L ÷ VL
     q = quote
@@ -224,39 +228,38 @@ end
     end
     if rep > 0
         push!(q.args,
-            quote
+          quote
               for iunscaled ∈ 0:$(rep-1)
-                    i = $(4VLT)*iunscaled
-                    vs_0 = vmul(vload($V, ptr_C + i), vα)
-                    vstore!(ptr_C + i, vs_0)
-                    vstore!(ptr_B + i, vadd(vload($V, ptr_B + i), vs_0))
+                  i = $(4VL)*iunscaled
+                  vs_0 = vmul(vload($V, gep(ptr_C, i)), vα)
+                  vstore!(gep(ptr_C, i), vs_0)
+                  vstore!(gep(ptr_B, i), vadd(vload($V, gep(ptr_B, i)), vs_0))
 
-                    vs_1 = vmul(vload($V, ptr_C + i + $VLT), vα)
-                    vstore!(ptr_C + i + $VLT, vs_1)
-                    vstore!(ptr_B + i + $VLT, vadd(vload($V, ptr_B + i + $VLT), vs_1))
+                  vs_1 = vmul(vload($V, gep(ptr_C, i + $VL)), vα)
+                  vstore!(gep(ptr_C, i + $VL), vs_1)
+                  vstore!(gep(ptr_B, i + $VL), vadd(vload($V, gep(ptr_B, i + $VL)), vs_1))
 
-                    vs_2 = vmul(vload($V, ptr_C + i + $(2VLT)), vα)
-                    vstore!(ptr_C + i + $(2VLT), vs_2)
-                    vstore!(ptr_B + i + $(2VLT), vadd(vload($V, ptr_B + i + $(2VLT)), vs_2))
+                  vs_2 = vmul(vload($V, gep(ptr_C, i + $(2VL))), vα)
+                  vstore!(gep(ptr_C, i + $(2VL)), vs_2)
+                  vstore!(gep(ptr_B, i + $(2VL)), vadd(vload($V, gep(ptr_B, i + $(2VL))), vs_2))
 
-                    vs_3 = vmul(vload($V, ptr_C + i + $(3VLT)), vα)
-                    vstore!(ptr_C + i + $(3VLT), vs_3)
-                    vstore!(ptr_B + i + $(3VLT), vadd(vload($V, ptr_B + i + $(3VLT)), vs_3))
-                end
-            end
+                  vs_3 = vmul(vload($V, gep(ptr_C, i + $(3VL))), vα)
+                  vstore!(gep(ptr_C, i + $(3VL)), vs_3)
+                  vstore!(gep(ptr_B, i + $(3VL)), vadd(vload($V, gep(ptr_B, i + $(3VL))), vs_3))
+              end
+          end
         )
     end
     for i ∈ 0:(rem-1)
-        offset = VLT*(i + 4rep)
+        offset = VL*(i + 4rep)
         push!(q.args,
             quote
-                $(Symbol(:vs_,i)) = vmul(vload($V, ptr_C + $offset), vα)
-                vstore!(ptr_C + $offset, $(Symbol(:vs_,i)))
-                vstore!(ptr_B + $offset, vadd(vload($V, ptr_B + $offset), $(Symbol(:vs_,i))))
+                $(Symbol(:vs_,i)) = vmul(vload($V, gep(ptr_C, $offset)), vα)
+                vstore!(gep(ptr_C, $offset), $(Symbol(:vs_,i)))
+                vstore!(gep(ptr_B, $offset), vadd(vload($V, gep(ptr_B, $offset)), $(Symbol(:vs_,i))))
             end
         )
     end
-
     push!(q.args, :(nothing))
     q
 end
@@ -294,7 +297,7 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracki
         end
         if n > 1 # update hessian
             dx_dg = zero(T)
-            @inbounds @simd for i ∈ 1:L
+            @avx for i ∈ 1:L
                 δ∇_i =  ∇_old[i] - ∇[i]
                 δ∇[i] = δ∇_i
                 dx_dg += s[i] * δ∇_i
@@ -306,14 +309,14 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracki
         end
         mul!(s, invH, ∇)
         dϕ_0 = zero(T)
-        @inbounds @simd for i ∈ 1:L
+        @avx for i ∈ 1:L
             s_i = s[i]
             dϕ_0 -= ∇[i] * s_i
         end
         if dϕ_0 >= zero(T) # If bad, reset search direction
             initial_invH!(invH)
             dϕ_0 = zero(T)
-            @inbounds @simd for i ∈ 1:L
+            @avx for i ∈ 1:L
                 s_i = ∇[i]
                 s[i] = s_i
                 dϕ_0 -= s_i * ∇[i]
@@ -325,7 +328,7 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracki
         iteration = 0
         ϕx_0, ϕx_1 = ϕ_0, ϕ_0
         α_1, α_2 = α_0, α_0
-        @inbounds @simd for i ∈ 1:L
+        @avx for i ∈ 1:L
             x_new[i] = x_old[i] + α_1*s[i]
         end
         ϕx_1 = -logdensity(obj, x_new)#; f_calls += 1;
@@ -336,14 +339,14 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracki
             iterfinite += 1
             α_1 = α_2
             α_2 = T(0.5)*α_1
-            @inbounds @simd for i ∈ 1:L
+            @avx for i ∈ 1:L
                 x_new[i] = x_old[i] + α_2*s[i]
             end
             ϕx_1 = -logdensity(obj, x_new)#; f_calls += 1;
         end
 
         # Backtrack until we satisfy sufficient decrease condition
-        while either_not_finite_or_op(>, ϕx_1, ϕ_0 + c_1 * α_2 * dϕ_0)
+        while either_not_finite_else_op(>, ϕx_1, ϕ_0 + c_1 * α_2 * dϕ_0)
             # Increment the number of steps we've had to perform
             iteration += 1
 
@@ -381,7 +384,7 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracki
 
             # Evaluate f(x) at proposed position
             # ϕx_0, ϕx_1 = ϕx_1, f(x + α_2*s); f_calls += 1;
-            @inbounds @simd for i ∈ 1:L
+            @avx for i ∈ 1:L
                 x_new[i] = x_old[i] + α_2*s[i]
             end
             ϕx_0, ϕx_1 = ϕx_1, -logdensity(obj, x_new)#; f_calls += 1;
@@ -475,7 +478,7 @@ function optimize!(_sptr_::StackPointer, obj, x::AbstractFixedSizeVector{P,T,L},
         end
 
         # Backtrack until we satisfy sufficient decrease condition
-        @fastmath while either_not_finite_or_op(>, ϕx_1, ϕ_0 + c_1 * α_2 * dϕ_0)
+        @fastmath while either_not_finite_else_op(>, ϕx_1, ϕ_0 + c_1 * α_2 * dϕ_0)
             # Increment the number of steps we've had to perform
             iteration += 1
 
@@ -634,7 +637,7 @@ function proptimize!(
         end
         @fastmath ϕx_1 = (T(0.5))*penalty*ϕx_1 - nϕx_1
         # Backtrack until we satisfy sufficient decrease condition
-        @fastmath while either_not_finite_or_op(>, ϕx_1, ϕ_0 + c_1 * α_2 * dϕ_0)
+        @fastmath while either_not_finite_else_op(>, ϕx_1, ϕ_0 + c_1 * α_2 * dϕ_0)
             # Increment the number of steps we've had to perform
             iteration += 1
             # @show iteration, iterations
