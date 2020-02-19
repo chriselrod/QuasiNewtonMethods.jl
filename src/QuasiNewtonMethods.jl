@@ -11,7 +11,7 @@ using SIMDPirates,
 using PaddedMatrices: AbstractFixedSizeVector,
     AbstractFixedSizeMatrix,
     AbstractFixedSizeArray,
-    AbstractFixedSizeVector
+    AbstractFixedSizeVector, ConstantVector, ConstantMatrix
 
 export optimize!, proptimize!
 
@@ -133,14 +133,14 @@ end
 abstract type AbstractBFGSState{P,T,L,LT} end
 
 mutable struct BFGSState{P,T,L,LT} <: AbstractBFGSState{P,T,L,LT}
-    x_old::ConstantFixedSizeVector{P,T,L}
-    x_new::ConstantFixedSizeVector{P,T,L}
-    ∇_old::ConstantFixedSizeVector{P,T,L}
-    δ∇::ConstantFixedSizeVector{P,T,L}
-    u::ConstantFixedSizeVector{P,T,L}
-    s::ConstantFixedSizeVector{P,T,L}
-    ∇::ConstantFixedSizeVector{P,T,L}
-    invH::ConstantFixedSizeMatrix{P,P,T,L,LT}
+    x_old::ConstantVector{P,T,L}
+    x_new::ConstantVector{P,T,L}
+    ∇_old::ConstantVector{P,T,L}
+    δ∇::ConstantVector{P,T,L}
+    u::ConstantVector{P,T,L}
+    s::ConstantVector{P,T,L}
+    ∇::ConstantVector{P,T,L}
+    invH::ConstantMatrix{P,P,T,L,LT}
     function BFGSState{P,T,L,LT}(::UndefInitializer) where {P,T,L,LT}
         new{P,T,L,LT}()
     end
@@ -160,14 +160,14 @@ BFGSState(::Val{P}, ::Type{T} = Float64) where {P,T} = BFGSState{P,T}(undef)
 This type exists primarily to be the field of another mutable struct, so that you can get a pointer to this object.
 """
 struct ConstantBFGSState{P,T,L,LT} <: AbstractBFGSState{P,T,L,LT}
-    x_old::ConstantFixedSizeVector{P,T,L}
-    invH::ConstantFixedSizeMatrix{P,P,T,L,LT}
-    x_new::ConstantFixedSizeVector{P,T,L}
-    ∇_old::ConstantFixedSizeVector{P,T,L}
-    δ∇::ConstantFixedSizeVector{P,T,L}
-    u::ConstantFixedSizeVector{P,T,L}
-    s::ConstantFixedSizeVector{P,T,L}
-    ∇::ConstantFixedSizeVector{P,T,L}
+    x_old::ConstantVector{P,T,L}
+    invH::ConstantMatrix{P,P,T,L,LT}
+    x_new::ConstantVector{P,T,L}
+    ∇_old::ConstantVector{P,T,L}
+    δ∇::ConstantVector{P,T,L}
+    u::ConstantVector{P,T,L}
+    s::ConstantVector{P,T,L}
+    ∇::ConstantVector{P,T,L}
 end=#
 struct PtrBFGSState{P,T,L,LT,NI<:Union{Int,Nothing}} <: AbstractBFGSState{P,T,L,LT}
     ptr::Ptr{T}
@@ -195,7 +195,7 @@ using VectorizationBase: gepbyte
 
 function initial_invH!(invH::PaddedMatrices.AbstractFixedSizeMatrix{P,P,T}) where {P,T}
     fill!(invH, zero(T))
-    @avx for p = size(invH,1)
+    @avx for p = 1:size(invH,1)
         invH[p,p] = one(T)
     end
 end
