@@ -104,6 +104,15 @@ end
 BFGSState(::Val{P}, ::Type{T} = Float64) where {P,T} = BFGSState{P,T}(undef)
 @inline Base.pointer(s::BFGSState{P,T})  where {P,T} = Base.unsafe_convert(Ptr{T}, pointer_from_objref(s))
 
+function PaddedMatrices.SIMDPirates.lifetime_start!(state::AbstractBFGSState{P,T,L}) where {P,T,L}
+    nothing
+    # PaddedMatrices.SIMDPirates.lifetime_start!(pointer(ref_x_new(state)), Val(PaddedMatrices.VectorizationBase.staticmul(T, Static{L}()*(Static{5}()+Static{L}()))))
+end
+function PaddedMatrices.SIMDPirates.lifetime_end!(state::AbstractBFGSState{P,T,L}) where {P,T,L}
+    nothing
+    # PaddedMatrices.SIMDPirates.lifetime_end!(pointer(ref_x_new(state)), Val(PaddedMatrices.VectorizationBase.staticmul(T, Static{L}()*(Static{5}()+Static{L}()))))
+end
+
 #="""
 This type exists primarily to be the field of another mutable struct, so that you can get a pointer to this object.
 """
@@ -163,10 +172,80 @@ function step!(x_new, x_old, s, obj, α)
 end
 
 
+function linesearch!(x_new::AbstractVector{T}, x_old, s, obj, ℓ₀, m, ls::BackTracking{order}) where {T, order}
+    c₁, ρₕ, ρₗ, iterations = T(ls.c₁), T(ls.ρₕ), T(ls.ρₗ), ls.iterations
+    sqrttol = sqrttolerance(T)
+
+    α₀ = one(T)
+
+    # Count the total number of iterations
+    iteration = 0
+    ℓx₀, ℓx₁ = ℓ₀, ℓ₀
+    α₁, α₂ = α₀, α₀
+    ℓx₁ = step!(x_new, x_old, s, obj, α₁)
+
+    # Hard-coded backtrack until we find a finite function value
+    # Halve α₂ until function value is finite
+    iterfinite = 0
+    while !Base.isfinite(ℓx₁) && iterfinite < iterfinitemax
+        iterfinite += 1
+        α₁, α₂ = (α₂, Base.FastMath.mul_fast(T(0.5), α₂))
+        ℓx₁ = step!(x_new, x_old, s, obj, α₂)
+    end
+
+    # Backtrack until we satisfy sufficient decrease condition
+    while !isfinite(ℓx₁) || @fastmath(ℓx₁ < ℓ₀ + α₂*c₁*m)
+        # @show α₂, ℓx₁, ℓ₀ + α₂*c₁*m, ℓ₀, α₂, c₁, m
+        # Increment the number of steps we've had to perform
+        iteration += 1
+
+        # Ensure termination
+        iteration > iterations && return zero(T) # linesearch_failure(iterations)
+
+        # Shrink proposed step-size:
+        if order == 2 || iteration == 1
+            # backtracking via quadratic interpolation:
+            # This interpolates the available data
+            #    f(0), f'(0), f(α)
+            # with a quadractic which is then minimised; this comes with a
+            # guaranteed backtracking factor 0.5 * (1-c_1)^{-1} which is < 1
+            # provided that c_1 < 1/2; the backtrack_condition at the beginning
+            # of the function guarantees at least a backtracking factor ρ.
+            # https://github.com/JuliaNLSolvers/LineSearches.jl/blob/0c182ce25c32a385a6156304dc24ff72afbfa308/src/backtracking.jl#L84
+            αₜ = @fastmath - (m * α₂*α₂) / ( T(2) * (ℓx₁ - ℓ₀ - m*α₂) )
+        else
+            denom = @fastmath one(T) / (α₁*α₁ * α₂*α₂ * (α₂ - α₁))
+            a = @fastmath (α₁*α₁*(ℓx₁ - ℓ₀ - m*α₂) - α₂*α₂*(ℓx₀ - ℓ₀ - m*α₁))*denom
+            b = @fastmath (-α₁*α₁*α₁*(ℓx₁ - ℓ₀ - m*α₂) + α₂*α₂*α₂*(ℓx₀ - ℓ₀ - m*α₁))*denom
+
+            if abs(a) <= eps(T) + sqrttol*abs(a)
+                αₜ = @fastmath m / (T(2)*b)
+            else
+                # discriminant
+                d = nanmax(@fastmath(b*b - T(3)*a*m), zero(T))
+                # quadratic equation root
+                # αₜ = @fastmath (sqrt(d) - b) / (3a)
+                αₜ = @fastmath (sqrt(d) + b) / (-3a)
+            end
+        end
+        # @show α₂, ℓx₁, ℓ₀ + α₂*c₁*m, ℓ₀, α₂, c₁, m
+        α₁ = α₂
+
+        αₜ = nanmin(αₜ, α₂*ρₕ) # avoid too small reductions
+        α₂ = nanmax(αₜ, α₂*ρₗ) # avoid too big reductions
+
+        # Evaluate f(x) at proposed position
+        ℓx₀, ℓx₁ = ℓx₁, step!(x_new, x_old, s, obj, α₂)
+        # @show α₂, ℓx₁, ℓ₀ + α₂*c₁*m, ℓ₀, α₂, c₁, m
+    end
+    α₂
+end
+
 """
 Optimum value is stored in state.x_old.
 """
-function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracking{order} = BackTracking(), tol = 1e-8) where {P,T,L,order}
+function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls = BackTracking(), tol = 1e-8) where {P,T,L}
+    PaddedMatrices.SIMDPirates.lifetime_start!(state)
     x_old = ref_x_old(state)
     ∇_old = ref_∇_old(state)
     x_new = ref_x_new(state)
@@ -177,21 +256,18 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracki
     B⁻¹ = ref_B⁻¹(state)
     copyto!(x_old, x)
     # initial_invH!(invH)
-    c₁, ρₕ, ρₗ, iterations = T(ls.c₁), T(ls.ρₕ), T(ls.ρₗ), ls.iterations
-    iterations = 20
     iterfinitemax = fractionalbits(T)
-    sqrttol = sqrttolerance(T)
-    α₀ = one(T)
     N = 200
     # f_calls = 0
     # g_calls = 0
     for n ∈ 1:N
         ℓ₀ = ∂logdensity!(∇_new, obj, x_old)#; f_calls +=1; g_calls +=1;
-        Base.isfinite(ℓ₀) || return T(NaN)
+        Base.isfinite(ℓ₀) || break
         # @show (n-1), ℓ₀, maximum(abs, ∇_new), tol ∇_new
         if maximum(abs, ∇_new) < tol
             ∇_new_original = ref_∇_new(state)
             pointer(∇_new) == pointer(∇_new_original) || copyto!(∇_new_original, ∇_new)
+            PaddedMatrices.SIMDPirates.lifetime_end!(state)
             return ℓ₀
         end
         if isone(n)
@@ -214,71 +290,13 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls::BackTracki
         end
         # @show s
         #### Perform line search
-
-        # Count the total number of iterations
-        iteration = 0
-        ℓx₀, ℓx₁ = ℓ₀, ℓ₀
-        α₁, α₂ = α₀, α₀
-        ℓx₁ = step!(x_new, x_old, s, obj, α₁)
-
-        # Hard-coded backtrack until we find a finite function value
-        # Halve α₂ until function value is finite
-        iterfinite = 0
-        while !Base.isfinite(ℓx₁) && iterfinite < iterfinitemax
-            iterfinite += 1
-            α₁, α₂ = (α₂, Base.FastMath.mul_fast(T(0.5), α₂))
-            ℓx₁ = step!(x_new, x_old, s, obj, α₂)
-        end
-
-        # Backtrack until we satisfy sufficient decrease condition
-        while !isfinite(ℓx₁) || @fastmath(ℓx₁ < ℓ₀ + α₂*c₁*m)
-            # @show α₂, ℓx₁, ℓ₀ + α₂*c₁*m, ℓ₀, α₂, c₁, m
-            # Increment the number of steps we've had to perform
-            iteration += 1
-
-            # Ensure termination
-            iteration > iterations && return T(NaN) # linesearch_failure(iterations)
-
-            # Shrink proposed step-size:
-            if order == 2 || iteration == 1
-                # backtracking via quadratic interpolation:
-                # This interpolates the available data
-                #    f(0), f'(0), f(α)
-                # with a quadractic which is then minimised; this comes with a
-                # guaranteed backtracking factor 0.5 * (1-c_1)^{-1} which is < 1
-                # provided that c_1 < 1/2; the backtrack_condition at the beginning
-                # of the function guarantees at least a backtracking factor ρ.
-                # https://github.com/JuliaNLSolvers/LineSearches.jl/blob/0c182ce25c32a385a6156304dc24ff72afbfa308/src/backtracking.jl#L84
-                αₜ = @fastmath - (m * α₂*α₂) / ( T(2) * (ℓx₁ - ℓ₀ - m*α₂) )
-            else
-                denom = @fastmath one(T) / (α₁*α₁ * α₂*α₂ * (α₂ - α₁))
-                a = @fastmath (α₁*α₁*(ℓx₁ - ℓ₀ - m*α₂) - α₂*α₂*(ℓx₀ - ℓ₀ - m*α₁))*denom
-                b = @fastmath (-α₁*α₁*α₁*(ℓx₁ - ℓ₀ - m*α₂) + α₂*α₂*α₂*(ℓx₀ - ℓ₀ - m*α₁))*denom
-
-                if abs(a) <= eps(T) + sqrttol*abs(a)
-                    αₜ = @fastmath m / (T(2)*b)
-                else
-                    # discriminant
-                    d = nanmax(@fastmath(b*b - T(3)*a*m), zero(T))
-                    # quadratic equation root
-                    # αₜ = @fastmath (sqrt(d) - b) / (3a)
-                    αₜ = @fastmath (sqrt(d) + b) / (-3a)
-                end
-            end
-            # @show α₂, ℓx₁, ℓ₀ + α₂*c₁*m, ℓ₀, α₂, c₁, m
-            α₁ = α₂
-
-            αₜ = nanmin(αₜ, α₂*ρₕ) # avoid too small reductions
-            α₂ = nanmax(αₜ, α₂*ρₗ) # avoid too big reductions
-
-            # Evaluate f(x) at proposed position
-            ℓx₀, ℓx₁ = ℓx₁, step!(x_new, x_old, s, obj, α₂)
-            # @show α₂, ℓx₁, ℓ₀ + α₂*c₁*m, ℓ₀, α₂, c₁, m
-        end
+        α₂ = linesearch!(x_new, x_old, s, obj, ℓ₀, m, ls)
+        iszero(α₂) && break
         update_state!(s, x_old, α₂)
         ∇_old, ∇_new = ∇_new, ∇_old
         # isone(n) && (s = ref_s(state))
     end
+    PaddedMatrices.SIMDPirates.lifetime_end!(state)
     T(NaN)
 end
 
