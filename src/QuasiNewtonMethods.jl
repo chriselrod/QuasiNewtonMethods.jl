@@ -175,6 +175,7 @@ end
 function linesearch!(x_new::AbstractVector{T}, x_old, s, obj, ℓ₀, m, ls::BackTracking{order}) where {T, order}
     c₁, ρₕ, ρₗ, iterations = T(ls.c₁), T(ls.ρₕ), T(ls.ρₗ), ls.iterations
     sqrttol = sqrttolerance(T)
+    iterfinitemax = fractionalbits(T)
 
     α₀ = one(T)
 
@@ -256,8 +257,7 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls = BackTrack
     B⁻¹ = ref_B⁻¹(state)
     copyto!(x_old, x)
     # initial_invH!(invH)
-    iterfinitemax = fractionalbits(T)
-    N = 200
+    N = 1000
     # f_calls = 0
     # g_calls = 0
     for n ∈ 1:N
