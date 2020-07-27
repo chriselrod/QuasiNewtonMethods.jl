@@ -76,7 +76,7 @@ struct BackTracking{O}
 end
 # BackTracking{O}(c₁ = 1e-4, ρₕ = 0.5, ρₗ = 0.1, iterations = 1_000) where {O} = BackTracking{O}(c₁, ρₕ, ρₗ, iterations)
 BackTracking{O}(c₁ = 1e-4, ρₕ = 0.5, ρₗ = 0.1) where {O} = BackTracking{O}(c₁, ρₕ, ρₗ, 1_000)
-BackTracking(c₁ = 1e-4, ρₕ = 0.5, ρₗ = 0.1, iterations = 1_000) = BackTracking{3}(c₁, ρₕ, ρₗ, iterations)
+BackTracking(c₁ = 1e-4, ρₕ = 0.5, ρₗ = 0.1, iterations = 1_000) = BackTracking{2}(c₁, ρₕ, ρₗ, iterations)
 
 abstract type AbstractBFGSState{P,T,L,LT} end
 
@@ -175,12 +175,10 @@ end
 function linesearch!(x_new::AbstractVector{T}, x_old, s, obj, ℓ₀, m, ls::BackTracking{order}) where {T, order}
     c₁, ρₕ, ρₗ, iterations = T(ls.c₁), T(ls.ρₕ), T(ls.ρₗ), ls.iterations
     sqrttol = sqrttolerance(T)
-    iterfinitemax = fractionalbits(T)
 
     α₀ = one(T)
 
     # Count the total number of iterations
-    iteration = 0
     ℓx₀, ℓx₁ = ℓ₀, ℓ₀
     α₁, α₂ = α₀, α₀
     ℓx₁ = step!(x_new, x_old, s, obj, α₁)
@@ -188,14 +186,15 @@ function linesearch!(x_new::AbstractVector{T}, x_old, s, obj, ℓ₀, m, ls::Bac
     # Hard-coded backtrack until we find a finite function value
     # Halve α₂ until function value is finite
     iterfinite = 0
-    while !Base.isfinite(ℓx₁) && iterfinite < iterfinitemax
+    iterfinitemax = fractionalbits(T)
+    while !isfinite(ℓx₁) && iterfinite < iterfinitemax
         iterfinite += 1
         α₁, α₂ = (α₂, Base.FastMath.mul_fast(T(0.5), α₂))
         ℓx₁ = step!(x_new, x_old, s, obj, α₂)
     end
-
+    iteration = 0
     # Backtrack until we satisfy sufficient decrease condition
-    while !isfinite(ℓx₁) || @fastmath(ℓx₁ < ℓ₀ + α₂*c₁*m)
+    while !(ℓx₁ ≥ @fastmath(ℓ₀ + α₂*c₁*m))
         # @show α₂, ℓx₁, ℓ₀ + α₂*c₁*m, ℓ₀, α₂, c₁, m
         # Increment the number of steps we've had to perform
         iteration += 1

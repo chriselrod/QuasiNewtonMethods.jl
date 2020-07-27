@@ -37,9 +37,8 @@ end
         @show n
         state = QuasiNewtonMethods.BFGSState{n}(undef);
         x = @FixedSize randn(n);
-        x[1] += 4
         @test abs(optimize!(state, Rosenbrock(), x)) < eps()
-        @show QuasiNewtonMethods.optimum(state) .- 1
+        @show QuasiNewtonMethods.optimum(state) .- 1;
         @test all(x -> x ≈ 1, QuasiNewtonMethods.optimum(state))
         @test maximum(abs, QuasiNewtonMethods.gradient(state)) < 1e-8
     end
