@@ -101,3 +101,9 @@ BenchmarkTools.Trial:
   evals/sample:     1
 ```
 
+Note that in most problems, evaluating the `logdensity` function will be the bottleneck, not the speed of the optimization library itself.
+Thus don't expect a performance improvement like this for real problems.
+Additionally, QuasiNewtonMethods.jl only provides a backtracking linesearch at the moment. If a different optimization algorithm provides better
+results, yielding convergence in fewer function evaluations, then again `Optim.jl` is likely to be faster.
+
+
