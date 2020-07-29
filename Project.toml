@@ -1,7 +1,7 @@
 name = "QuasiNewtonMethods"
 uuid = "64452400-c6f4-4a1d-a4f6-ad403655768a"
 authors = ["Chris Elrod <elrodc@gmail.com>"]
-version = "0.1.0"
+version = "0.1.1"
 
 [deps]
 LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"

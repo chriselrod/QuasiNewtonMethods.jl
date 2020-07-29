@@ -160,9 +160,7 @@ end
 nanmin(a, b) = a < b ? a : (isnan(b) ? a : b)
 nanmax(a, b) = a < b ? b : (isnan(a) ? b : a)
 
-
-fractionalbits(::Type{T}) where {T} = trailing_zeros(reinterpret(Base.uinttype(T),floatmin(T)))
-sqrttolerance(::Type{T}) where {T} = T(1 / (1 << (fractionalbits(T) >> 1)))
+sqrttolerance(::Type{T}) where {T} = T(1 / (1 << (Base.Math.significand_bits(T) >> 1)))
 
 function step!(x_new, x_old, s, obj, α)
     @avx for i ∈ eachindex(x_new)
@@ -186,7 +184,7 @@ function linesearch!(x_new::AbstractVector{T}, x_old, s, obj, ℓ₀, m, ls::Bac
     # Hard-coded backtrack until we find a finite function value
     # Halve α₂ until function value is finite
     iterfinite = 0
-    iterfinitemax = fractionalbits(T)
+    iterfinitemax = Base.Math.significand_bits(T)
     while !isfinite(ℓx₁) && iterfinite < iterfinitemax
         iterfinite += 1
         α₁, α₂ = (α₂, Base.FastMath.mul_fast(T(0.5), α₂))
