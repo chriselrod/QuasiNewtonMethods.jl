@@ -9,3 +9,5 @@ src/#*#
 tests/#*#
 *.mem
 Manifest.toml
+*~
+
