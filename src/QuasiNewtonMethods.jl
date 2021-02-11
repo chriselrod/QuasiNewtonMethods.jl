@@ -1,20 +1,18 @@
 module QuasiNewtonMethods
 
-using PaddedMatrices, LoopVectorization
+using StrideArrays, LoopVectorization, VectorizationBase
 
-using PaddedMatrices.VectorizationBase: gepbyte
-using PaddedMatrices: AbstractFixedSizeVector,
-    AbstractFixedSizeMatrix,
-    AbstractFixedSizeArray,
-    AbstractFixedSizeVector,
-    ConstantVector, ConstantMatrix,
-    logdensity, ∂logdensity!
+using VectorizationBase: gep
+using StrideArrays: PtrArray, StrideArray
 
-export optimize!, logdensity, ∂logdensity!
+function logdensity end
+function ∂logdensity! end
+
+export optimize!
 
 
 abstract type AbstractProbabilityModel{D} end# <: LogDensityProblems.AbstractLogDensityProblem end
-dimension(::AbstractProbabilityModel{D}) where {D} = PaddedMatrices.Static{D}()
+dimension(::AbstractProbabilityModel{D}) where {D} = StaticInt{D}()
 Base.length(::AbstractProbabilityModel{D}) where {D} = D
 function Base.show(io::IO, ℓ::AbstractProbabilityModel{D}) where {D}
     print(io, "$D-dimensional Probability Model")
@@ -81,75 +79,66 @@ BackTracking(c₁ = 1e-4, ρₕ = 0.5, ρₗ = 0.1, iterations = 1_000) = BackTr
 abstract type AbstractBFGSState{P,T,L,LT} end
 
 mutable struct BFGSState{P,T,L,LT} <: AbstractBFGSState{P,T,L,LT}
-    x_old::ConstantVector{P,T,1,L}
-    ∇_new::ConstantVector{P,T,1,L}
-    x_new::ConstantVector{P,T,1,L}
-    ∇_old::ConstantVector{P,T,1,L}
-    y::ConstantVector{P,T,1,L}
-    s::ConstantVector{P,T,1,L}
-    B⁻¹y::ConstantVector{P,T,1,L}
-    B⁻¹::ConstantMatrix{P,P,T,1,L,LT}
+    x_old::NTuple{L,T}
+    ∇_new::NTuple{L,T}
+    x_new::NTuple{L,T}
+    ∇_old::NTuple{L,T}
+    y::NTuple{L,T}
+    s::NTuple{L,T}
+    B⁻¹y::NTuple{L,T}
+    B⁻¹::NTuple{LT,T}
     function BFGSState{P,T,L,LT}(::UndefInitializer) where {P,T,L,LT}
         new{P,T,L,LT}()
     end
     @generated function BFGSState{P}(::UndefInitializer) where {P}
-        L = PaddedMatrices.calc_padding(P, Float64)
+        L =  VectorizationBase.align(P,VectorizationBase.pick_vector_width(Float64))
         :(BFGSState{$P,Float64,$L,$(P*L)}(undef))
     end
     @generated function BFGSState{P,T}(::UndefInitializer) where {P,T}
-        L = PaddedMatrices.calc_padding(P, T)
+        L =  VectorizationBase.align(P,VectorizationBase.pick_vector_width(T))
         :(BFGSState{$P,$T,$L,$(P*L)}(undef))
     end
 end
 BFGSState(::Val{P}, ::Type{T} = Float64) where {P,T} = BFGSState{P,T}(undef)
 @inline Base.pointer(s::BFGSState{P,T})  where {P,T} = Base.unsafe_convert(Ptr{T}, pointer_from_objref(s))
 
-function PaddedMatrices.SIMDPirates.lifetime_start!(state::AbstractBFGSState{P,T,L}) where {P,T,L}
+function VectorizationBase.lifetime_start!(state::AbstractBFGSState{P,T,L}) where {P,T,L}
     nothing
-    # PaddedMatrices.SIMDPirates.lifetime_start!(pointer(ref_x_new(state)), Val(PaddedMatrices.VectorizationBase.staticmul(T, Static{L}()*(Static{5}()+Static{L}()))))
+    # VectorizationBase.lifetime_start!(pointer(ref_x_new(state)), Val(VectorizationBase.staticmul(T, StaticInt{L}()*(StaticInt{5}()+StaticInt{L}()))))
 end
-function PaddedMatrices.SIMDPirates.lifetime_end!(state::AbstractBFGSState{P,T,L}) where {P,T,L}
+function VectorizationBase.lifetime_end!(state::AbstractBFGSState{P,T,L}) where {P,T,L}
     nothing
-    # PaddedMatrices.SIMDPirates.lifetime_end!(pointer(ref_x_new(state)), Val(PaddedMatrices.VectorizationBase.staticmul(T, Static{L}()*(Static{5}()+Static{L}()))))
+    # VectorizationBase.lifetime_end!(pointer(ref_x_new(state)), Val(VectorizationBase.staticmul(T, StaticInt{L}()*(StaticInt{5}()+StaticInt{L}()))))
 end
 
-#="""
-This type exists primarily to be the field of another mutable struct, so that you can get a pointer to this object.
-"""
-struct ConstantBFGSState{P,T,L,LT} <: AbstractBFGSState{P,T,L,LT}
-    x_old::ConstantVector{P,T,L}
-    invH::ConstantMatrix{P,P,T,L,LT}
-    x_new::ConstantVector{P,T,L}
-    ∇_old::ConstantVector{P,T,L}
-    δ∇::ConstantVector{P,T,L}
-    u::ConstantVector{P,T,L}
-    s::ConstantVector{P,T,L}
-    ∇::ConstantVector{P,T,L}
-end=#
 struct PtrBFGSState{P,T,L,LT,NI<:Union{Int,Nothing}} <: AbstractBFGSState{P,T,L,LT}
     ptr::Ptr{T}
     offset::NI
 end
 @inline Base.pointer(state::PtrBFGSState) = state.ptr
 
-@inline ref_x_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P}(pointer(s))
-@inline ref_∇_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 4)))
-@inline ref_x_new(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 3)))
-@inline ref_∇_new(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 2)))
-@inline ref_y(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 5)))
-@inline ref_s(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 6)))
-@inline ref_B⁻¹y(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrVector{P}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 7)))
-@inline ref_B⁻¹(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = PtrMatrix{P,P}(gepbyte(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 8)))
+@inline function dense_vector(ptr::Ptr{T}, ::StaticInt{P}) where {T,P}
+    PtrArray(ptr, (StaticInt{P}(),), (VectorizationBase.static_sizeof(T),), Val{(true,)}())
+end
+@inline function square_matrix(ptr::Ptr{T}, ::StaticInt{P}, ::StaticInt{X}) where {T,P,X}
+    st = VectorizationBase.static_sizeof(T)
+    PtrArray(ptr, (StaticInt{P}(),StaticInt{P}()), (st,st*StaticInt{X}()), Val{(true,false)}())
+end
+@inline function square_matrix(ptr::Ptr{T}, ::StaticInt{P}, ::StaticInt{P}) where {T,P}
+    st = VectorizationBase.static_sizeof(T)
+    PtrArray(ptr, (StaticInt{P}(),StaticInt{P}()), (st,st*StaticInt{P}()), Val{(true,true)}())
+end
 
-# @inline ref_x_new(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrVector{P}(gep(pointer(s), s.offset))
-# @inline ref_∇_old(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrVector{P}(gep(pointer(s), 2s.offset))
-# @inline ref_δ∇(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrVector{P}(gep(pointer(s), 3s.offset))
-# @inline ref_u(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrVector{P}(gep(pointer(s), 4s.offset))
-# @inline ref_s(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrVector{P}(gep(pointer(s), 5s.offset))
-# @inline ref_∇(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrVector{P}(gep(pointer(s), 6s.offset))
-# @inline ref_invH(s::PtrBFGSState{-1,T,L,LT,Int}) where {P,T,L,LT} = PtrMatrix{P,P,T,L}(gep(pointer(s), 7s.offset))
+@inline ref_x_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = dense_vector(pointer(s), StaticInt{P}())
+@inline ref_∇_old(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = dense_vector(gep(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 4)), StaticInt{P}())
+@inline ref_x_new(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = dense_vector(gep(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 3)), StaticInt{P}())
+@inline ref_∇_new(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = dense_vector(gep(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 2)), StaticInt{P}())
+@inline ref_y(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = dense_vector(gep(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 5)), StaticInt{P}())
+@inline ref_s(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = dense_vector(gep(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 6)), StaticInt{P}())
+@inline ref_B⁻¹y(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = dense_vector(gep(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 7)), StaticInt{P}())
+@inline ref_B⁻¹(s::AbstractBFGSState{P,T,L,LT}) where {P,T,L,LT} = square_matrix(gep(pointer(s), fieldoffset(BFGSState{P,T,L,LT}, 8)), StaticInt{P}(), StaticInt{L}())
 
-function initial_B⁻¹!(B⁻¹::PaddedMatrices.AbstractFixedSizeMatrix{P,P,T,1,L}) where {P,T,L}
+function initial_B⁻¹!(B⁻¹::AbstractMatrix)
     @avx for c ∈ axes(B⁻¹,2), r ∈ axes(B⁻¹,1)
         B⁻¹[r,c] = (r == c)
     end
@@ -242,8 +231,8 @@ end
 """
 Optimum value is stored in state.x_old.
 """
-function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls = BackTracking(), tol = 1e-8) where {P,T,L}
-    PaddedMatrices.SIMDPirates.lifetime_start!(state)
+function optimize!(state, obj, x::AbstractStrideArray{Tuple{StaticInt{P}},D,T}, ls = BackTracking(), tol = 1e-8) where {P,T,D}
+    VectorizationBase.lifetime_start!(state)
     x_old = ref_x_old(state)
     ∇_old = ref_∇_old(state)
     x_new = ref_x_new(state)
@@ -264,7 +253,7 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls = BackTrack
         if maximum(abs, ∇_new) < tol
             ∇_new_original = ref_∇_new(state)
             pointer(∇_new) == pointer(∇_new_original) || copyto!(∇_new_original, ∇_new)
-            PaddedMatrices.SIMDPirates.lifetime_end!(state)
+            VectorizationBase.lifetime_end!(state)
             return ℓ₀
         end
         if isone(n)
@@ -293,7 +282,7 @@ function optimize!(state, obj, x::AbstractFixedSizeVector{P,T,L}, ls = BackTrack
         ∇_old, ∇_new = ∇_new, ∇_old
         # isone(n) && (s = ref_s(state))
     end
-    PaddedMatrices.SIMDPirates.lifetime_end!(state)
+    VectorizationBase.lifetime_end!(state)
     T(NaN)
 end
 

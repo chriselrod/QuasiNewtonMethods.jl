@@ -1,4 +1,4 @@
-using QuasiNewtonMethods, PaddedMatrices
+using QuasiNewtonMethods, StrideArrays, Aqua
 using Test
 
 struct Rosenbrock end
@@ -33,12 +33,13 @@ function QuasiNewtonMethods.∂logdensity!(∇, ::Rosenbrock, θ)
 end
 
 @testset "QuasiNewtonMethods.jl" begin
+    Aqua.test_all(QuasiNewtonMethods)
     for n ∈ 2:24
         @show n
         state = QuasiNewtonMethods.BFGSState{n}(undef);
-        x = @FixedSize randn(n);
+        x = @StrideArray randn(StaticInt(n));
         # 2nd order
-        @test abs(optimize!(state, Rosenbrock(), x)) < eps()
+        @test abs(optimize!(state, Rosenbrock(), x)) < 2eps()
         @show QuasiNewtonMethods.optimum(state) .- 1;
         @test all(x -> x ≈ 1, QuasiNewtonMethods.optimum(state))
         @test maximum(abs, QuasiNewtonMethods.gradient(state)) < 1e-8

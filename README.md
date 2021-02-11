@@ -15,7 +15,7 @@
 
 This library aims to be fast. It's intended use is for optimizing in statistical logdensity functions, in particular in conjunction with ProbabilityModels.jl and InplaceDHMC.jl (both libraries are still undergoing major development and are not yet usable). The API thus requires using `logdensity` functions, which `ProbabilityModels` will automatically define for a given model:
 ```julia
-using QuasiNewtonMethods, PaddedMatrices
+using QuasiNewtonMethods, StrideArrays
 using Test
 
 struct Rosenbrock end
