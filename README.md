@@ -30,7 +30,7 @@ function QuasiNewtonMethods.logdensity(::Rosenbrock, θ)
         -muladd(δ, δ, -s)
     else
         s
-    end        
+    end
 end
 
 function QuasiNewtonMethods.∂logdensity!(∇, ::Rosenbrock, θ) 
@@ -56,7 +56,7 @@ julia> n = 60 # set size
 
 julia> state = QuasiNewtonMethods.BFGSState{n}(undef);
 
-julia> x = @FixedSize randn(n);
+julia> x = @StrideArray randn(StaticInt(n));
 
 julia> @test abs(optimize!(state, Rosenbrock(), x)) < eps()
 Test Passed
@@ -87,7 +87,7 @@ julia> using Optim, LineSearches
 
 julia> xa = Vector(x);
 
-julia> @benchmark Optim.maximize(x -> logdensity(Rosenbrock(), x), (∇, x) -> ∂logdensity!(∇, Rosenbrock(), x), $xa, $(BFGS(linesearch=BackTracking(order=2))))
+julia> @benchmark Optim.maximize(x -> QuasiNewtonMethods.logdensity(Rosenbrock(), x), (∇, x) -> QuasiNewtonMethods.∂logdensity!(∇, Rosenbrock(), x), $xa, $(BFGS(linesearch=BackTracking(order=2))))
 BenchmarkTools.Trial:
   memory estimate:  291.27 KiB
   allocs estimate:  2483
