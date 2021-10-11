@@ -44,7 +44,8 @@ function BFGS_update!(B⁻¹::AbstractMatrix{T}, B⁻¹yₖ, yₖ, sₖ, ∇_new
     @avx for c ∈ axes(B⁻¹,2)
         t = zero(yₖᵀB⁻¹yₖ)
         for r ∈ axes(B⁻¹,1)
-            t += yₖ[r] * B⁻¹[r,c]
+            # t += yₖ[r] * B⁻¹[r,c]
+            t += yₖ[r] * B⁻¹[c,r]
         end
         B⁻¹yₖ[c] = t * sₖᵀyₖ⁻¹
         yₖᵀB⁻¹yₖ += t * yₖ[c]
@@ -55,8 +56,10 @@ function BFGS_update!(B⁻¹::AbstractMatrix{T}, B⁻¹yₖ, yₖ, sₖ, ∇_new
     @avx for c ∈ axes(B⁻¹,2)
         sₙ = zero(eltype(yₖ))
         for r ∈ axes(B⁻¹,1)
-            B⁻¹ᵣ = B⁻¹[r,c] + c₁ * sₖ[r] * sₖ[c] - B⁻¹yₖ[r]*sₖ[c] - B⁻¹yₖ[c]*sₖ[r]
-            B⁻¹[r,c] = B⁻¹ᵣ
+            # B⁻¹ᵣ = B⁻¹[r,c] + c₁ * sₖ[r] * sₖ[c] - B⁻¹yₖ[r]*sₖ[c] - B⁻¹yₖ[c]*sₖ[r]
+            # B⁻¹[r,c] = B⁻¹ᵣ
+            B⁻¹ᵣ = B⁻¹[c,r] + c₁ * sₖ[r] * sₖ[c] - B⁻¹yₖ[r]*sₖ[c] - B⁻¹yₖ[c]*sₖ[r]
+            B⁻¹[c,r] = B⁻¹ᵣ
             sₙ += B⁻¹ᵣ * ∇_new[r]
         end
         yₖ[c] = sₙ
