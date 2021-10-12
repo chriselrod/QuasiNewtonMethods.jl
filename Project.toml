@@ -9,9 +9,9 @@ StrideArrays = "d1fa6d79-ef01-42a6-86c9-f7c551f8593b"
 VectorizationBase = "3d5dd08c-fd9d-11e8-17fa-ed2836048c2f"
 
 [compat]
-LoopVectorization = "0.11,0.12"
+LoopVectorization = "0.12.85"
 StrideArrays = "0.1.2"
-VectorizationBase = "0.18,0.19,0.20,0.21"
+VectorizationBase = "0.21"
 julia = "1.5"
 
 [extras]
